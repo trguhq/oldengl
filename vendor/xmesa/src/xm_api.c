@@ -65,6 +65,7 @@
 #include "glxheader.h"
 #ifdef OLDENGL_XGL_ACCEL
 #include "xgl_accel.h"
+#include "xgl_tnl.h"
 #endif
 #include "GL/xmesa.h"
 #include "xmesaP.h"
@@ -1677,6 +1678,7 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    xmesa_init_pointers( ctx );
 #ifdef OLDENGL_XGL_ACCEL
    oldengl_xgl_xmesa_attach(ctx);
+   oldengl_xgl_tnl_install(ctx);
 #endif
 
 

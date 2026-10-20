@@ -478,3 +478,12 @@ void xgl_context_new_frame(Xgl_ctx ctx)
             write_pixel(ctx, x, y, &ctx->background);
     ++clears;
 }
+
+/* Generic dispatch tests exercise window-space paths. Object-space transform
+ * behavior is covered by the real-Xlib fixture in mock_native_xgl.c. */
+void xgl_transform_write_specific(Xgl_trans transform, void *matrix,
+                                   Xgl_trans_member members)
+{
+    assert(transform && transform->type == XGL_TRANS && matrix);
+    (void)members;
+}

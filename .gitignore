@@ -9,3 +9,6 @@
 /examples/triangle
 /examples/glx_triangle
 /build/
+/tests/test_tnl
+/examples/glx_textured_cube
+/tests/test_texture

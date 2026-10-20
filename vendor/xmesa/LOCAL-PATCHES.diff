@@ -1472,27 +1472,29 @@
        return f;
 --- a/src/xm_api.c
 +++ b/src/xm_api.c
-@@ -63,6 +63,9 @@
+@@ -63,6 +63,10 @@
  #endif
  
  #include "glxheader.h"
 +#ifdef OLDENGL_XGL_ACCEL
 +#include "xgl_accel.h"
++#include "xgl_tnl.h"
 +#endif
  #include "GL/xmesa.h"
  #include "xmesaP.h"
  #include "context.h"
-@@ -1672,6 +1675,9 @@
+@@ -1672,6 +1676,10 @@
     /* Set up some constant pointers:
      */
     xmesa_init_pointers( ctx );
 +#ifdef OLDENGL_XGL_ACCEL
 +   oldengl_xgl_xmesa_attach(ctx);
++   oldengl_xgl_tnl_install(ctx);
 +#endif
  
  
     /* Run the config file
-@@ -1692,6 +1698,9 @@
+@@ -1692,6 +1700,9 @@
        fxMesaDestroyContext(c->xm_buffer->FXctx);
  #endif
     if (c->gl_ctx) {

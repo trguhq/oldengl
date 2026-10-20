@@ -11,13 +11,14 @@ surfaces, context copying, X fonts, and procedure lookup. It uses Xlib directly;
 it does not implement the indirect GLX wire protocol or install an X server
 extension. Explicit indirect-context requests return NULL.
 
-XGL handles eligible front-buffer points, lines, filled triangles, whole color
-clears, and identity color copies. Transformations, lighting and clipping remain
-in Mesa. Depth/stencil tests, blending, textures, alpha buffers and other unsafe
-state combinations use software rendering. Back buffers, pixmaps and pbuffers
-also use software. Both paths access the same drawable, preserving readback and
-mixed rendering. See [acceleration coverage](docs/ACCELERATION.md) and
-[GLX details](docs/GLX.md); this is not an offload of every GL operation.
+The GLX path submits eligible object-space geometry to XGL for model/view and
+perspective transforms, clipping, ambient/diffuse lighting, texture mapping,
+depth testing, and rasterization. It can draw to front and back window buffers.
+Mesa handles unsupported state combinations and keeps software rendering and
+readback coherent with native draws. XGL selects its device implementation;
+actual hardware coverage depends on the installed graphics adapter and driver.
+See [acceleration coverage](docs/ACCELERATION.md) and [GLX details](docs/GLX.md)
+for the supported combinations and remaining software operations.
 
 The supplied manuals informed the API and presentation design. See
 [the implementation notes](docs/XGL.md) for the XGL calls and manual page
@@ -71,8 +72,16 @@ and, for example, `PREFIX=/opt/oldengl DESTDIR=/tmp/stage`.
 Include `<GL/gl.h>` and `<GL/glx.h>`, choose a visual or FBConfig, create a
 context with `direct=True`, then use ordinary `glXMakeCurrent`, GL calls,
 and `glXSwapBuffers`. GLX double-buffered contexts have separate front and
-back buffers. Eligible `GL_FRONT` rendering uses XGL; `GL_BACK` remains
-software. `OLDENGL_NO_XGL=1` disables native dispatch for comparison.
+back buffers. Eligible `GL_FRONT` and `GL_BACK` window rendering uses XGL;
+back-buffer acceleration requires two allocated XGL window buffers. Color and
+depth transfers preserve mixed native/software results. `OLDENGL_NO_XGL=1`
+disables native dispatch for comparison.
+
+[examples/glx_textured_cube.c](examples/glx_textured_cube.c) demonstrates a
+perspective-transformed, lit, textured, depth-tested rotating cube in a
+double-buffered GLX window. Build it with `make example` and the same native
+build variables, then run `examples/glx_textured_cube`. Press a key to quit,
+or use `--frames 120` for a bounded run. The example needs no GLU or GLUT.
 
 `make glx-software` builds `libGLsoft.a` and `.so` without an XGL SDK, using
 only Xlib. Set `X11_CPPFLAGS` and `X11_LIBS` if X11 is outside the default
@@ -129,6 +138,8 @@ The software renderer can also run headlessly on a development host:
 make -j4 software
 make test
 make test-accel
+make test-tnl
+make test-texture
 ```
 
 This builds `lib/liboldengl.a` and `.so` with `<GL/osmesa.h>` for offscreen

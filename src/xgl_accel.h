@@ -9,7 +9,15 @@
 typedef struct oldengl_xgl_accel OldenGLXGLAccel;
 struct oldengl_xgl_accel_stats {
     unsigned long points, lines, triangles, clears, copies, fallbacks;
+    unsigned long object_batches, transformed_vertices, lit_vertices;
+    unsigned long depth_batches, back_batches, textured_vertices;
 };
+
+struct oldengl_xgl_batch;
+/* back_rgba is a bottom-up, packed RGBA staging image for GL_BACK, or NULL
+ * for GL_FRONT. Successful back draws update it before returning. */
+GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *, GLcontext *,
+    const struct oldengl_xgl_batch *, GLubyte *back_rgba);
 
 /* Uses the existing native X window as its authoritative color buffer. */
 OldenGLXGLAccel *oldengl_xgl_accel_create(Display *, Window, int screen,

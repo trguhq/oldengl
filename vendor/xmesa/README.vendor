@@ -10,3 +10,7 @@ in ../mesa/LICENSE.MIT and ../mesa/LICENSE.SGI-B-1.1.
 UPSTREAM-SHA256 records original file content, before local corrections.
 Local corrections implement missing GLX 1.3 behavior, context lifetime
 and validation; native XGL acceleration hooks are explicitly conditional.
+
+The conditional native build also installs OldenGL's object-space transform,
+lighting, clipping and texture stage before the standard Mesa TNL pipeline.
+LOCAL-PATCHES.diff records the exact integration changes.

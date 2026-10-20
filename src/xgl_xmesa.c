@@ -1,9 +1,11 @@
 /* MIT licensed. Connect native XGL primitives to Mesa's software fallback. */
 #include "xgl_accel.h"
+#include "xgl_tnl.h"
 #include "xmesaP.h"
 #include "swrast/s_context.h"
 #include "swrast/s_pb.h"
 #include <stdlib.h>
+#include <X11/Xutil.h>
 
 struct accelerated_context {
     GLcontext *ctx;
@@ -37,14 +39,15 @@ find(GLcontext *ctx)
 }
 
 static OldenGLXGLAccel *
-surface(struct accelerated_context *n)
+surface(struct accelerated_context *n, GLboolean object_space)
 {
     const XMesaContext xm = (XMesaContext)n->ctx->DriverCtx;
     XMesaBuffer b = xm->xm_buffer;
     const char *disabled = getenv("OLDENGL_NO_XGL");
     if ((disabled && *disabled && *disabled != '0') || !b ||
-        b->pixmap_flag || b->pbuffer_flag || b->buffer != b->frontbuffer ||
-        n->ctx->Color.DriverDrawBuffer != GL_FRONT_LEFT ||
+        b->pixmap_flag || b->pbuffer_flag ||
+        (n->ctx->Color.DriverDrawBuffer != GL_FRONT_LEFT &&
+         !(object_space && n->ctx->Color.DriverDrawBuffer == GL_BACK_LEFT && b->db_state)) ||
         (xm->xm_visual->visinfo->class != TrueColor &&
          xm->xm_visual->visinfo->class != DirectColor))
         return NULL;
@@ -73,10 +76,84 @@ surface(struct accelerated_context *n)
 static OldenGLXGLAccel *
 begin_native(struct accelerated_context *n)
 {
-    OldenGLXGLAccel *a = surface(n);
+    OldenGLXGLAccel *a = surface(n, GL_FALSE);
     if (a)
         _mesa_flush_pb(n->ctx);
     return a;
+}
+
+static unsigned int color_component(unsigned long pixel, unsigned long mask)
+{
+    unsigned int shift = 0;
+    if (!mask) return 0;
+    while (!(mask & 1UL)) { mask >>= 1; ++shift; }
+    return (unsigned int)((((pixel >> shift) & mask)*255UL + mask/2)/mask);
+}
+
+static unsigned long component_bits(unsigned int component, unsigned long mask)
+{
+    unsigned int shift = 0;
+    unsigned long maximum = mask;
+    if (!mask) return 0;
+    while (!(maximum & 1UL)) { maximum >>= 1; ++shift; }
+    return (((unsigned long)component*maximum + 127UL)/255UL << shift) & mask;
+}
+
+GLboolean
+oldengl_xgl_xmesa_draw_object_batch(GLcontext *ctx,
+                                    const struct oldengl_xgl_batch *batch)
+{
+    struct accelerated_context *n = find(ctx);
+    XMesaContext xm = (XMesaContext)ctx->DriverCtx;
+    XMesaBuffer b = xm->xm_buffer;
+    OldenGLXGLAccel *native;
+    XImage *image = NULL;
+    GLubyte *rgba = NULL;
+    GLboolean owned = GL_FALSE, rendered;
+    size_t x, y, width, height;
+    unsigned long red, green, blue;
+    if (!n || !b || !ctx->Visual.rgbMode || ctx->Visual.alphaBits ||
+        ctx->RenderMode != GL_RENDER) return GL_FALSE;
+    native = surface(n, GL_TRUE);
+    if (!native) return GL_FALSE;
+    _mesa_flush_pb(ctx);
+    width = b->width; height = b->height;
+    red = xm->xm_visual->visinfo->red_mask;
+    green = xm->xm_visual->visinfo->green_mask;
+    blue = xm->xm_visual->visinfo->blue_mask;
+    if (ctx->Color.DriverDrawBuffer == GL_BACK_LEFT) {
+        if (!width || !height || width > ((size_t)-1)/height/4) return GL_FALSE;
+        image = b->backimage;
+        if (!image && b->backpixmap) {
+            image = XGetImage(xm->display, b->backpixmap, 0, 0,
+                (unsigned int)width, (unsigned int)height, AllPlanes, ZPixmap);
+            owned = GL_TRUE;
+        }
+        if (!image) return GL_FALSE;
+        rgba = (GLubyte *)malloc(width*height*4);
+        if (!rgba) { if (owned) XDestroyImage(image); return GL_FALSE; }
+        for (y = 0; y < height; ++y) for (x = 0; x < width; ++x) {
+            unsigned long pixel = XGetPixel(image, (int)x, (int)(height-y-1));
+            GLubyte *p = rgba+(y*width+x)*4;
+            p[0] = (GLubyte)color_component(pixel, red);
+            p[1] = (GLubyte)color_component(pixel, green);
+            p[2] = (GLubyte)color_component(pixel, blue); p[3] = 255;
+        }
+    }
+    rendered = oldengl_xgl_accel_draw_batch(native, ctx, batch, rgba);
+    if (rendered && image) {
+        for (y = 0; y < height; ++y) for (x = 0; x < width; ++x) {
+            const GLubyte *p = rgba+(y*width+x)*4;
+            unsigned long pixel = component_bits(p[0], red) |
+                component_bits(p[1], green) | component_bits(p[2], blue);
+            XPutPixel(image, (int)x, (int)(height-y-1), pixel);
+        }
+        if (owned) XPutImage(xm->display, b->backpixmap, b->swapgc, image,
+                             0, 0, 0, 0, (unsigned int)width, (unsigned int)height);
+    }
+    free(rgba);
+    if (owned) XDestroyImage(image);
+    return rendered;
 }
 
 static void

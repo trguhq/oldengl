@@ -1,18 +1,11 @@
 /* MIT licensed. Native XGL rasterization with conservative GL state checks. */
 #include "xgl_accel.h"
 #include "xgl_session.h"
+#include "xgl_accel_private.h"
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-struct oldengl_xgl_accel {
-    Display *display;
-    Xgl_object raster, context;
-    GLsizei width, height;
-    GLboolean failed;
-    struct oldengl_xgl_accel_stats stats;
-};
 
 static GLboolean
 color_target(const GLcontext *ctx)
@@ -121,6 +114,7 @@ oldengl_xgl_accel_destroy(OldenGLXGLAccel *a)
         xgl_context_flush(a->context, XGL_FLUSH_SYNCHRONIZE);
         xgl_object_destroy(a->context);
     }
+    oldengl_xgl_batch_cleanup(a);
     if (a->raster)
         xgl_object_destroy(a->raster);
     oldengl_xgl_release();
@@ -134,6 +128,7 @@ oldengl_xgl_accel_resize(OldenGLXGLAccel *a, GLsizei width, GLsizei height)
     if (!a || a->failed || width < 1 || height < 1)
         return GL_FALSE;
     serial = oldengl_xgl_error_serial();
+    oldengl_xgl_batch_resize(a);
     XSync(a->display, False);
     xgl_window_raster_resize(a->raster);
     if (oldengl_xgl_error_serial() != serial) {
@@ -154,6 +149,8 @@ start(OldenGLXGLAccel *a, GLcontext *ctx, GLenum primitive)
         ++a->stats.fallbacks;
         return GL_FALSE;
     }
+    if (!oldengl_xgl_batch_reset(a))
+        return GL_FALSE;
     /* Drain Xlib writes before direct device access. The XMesa adapter also
      * drains the swrast pixel batch before calling this module. */
     XSync(a->display, False);
@@ -289,6 +286,8 @@ oldengl_xgl_accel_clear(OldenGLXGLAccel *a, GLcontext *ctx)
     unsigned long serial;
     if (!a || a->failed || !color_target(ctx) || ctx->Scissor.Enabled)
         return GL_FALSE;
+    if (!oldengl_xgl_batch_reset(a))
+        return GL_FALSE;
     serial = oldengl_xgl_error_serial();
     XSync(a->display, False);
     color.rgb.r = (float)ctx->Color.ClearColor[0] / CHAN_MAXF;
@@ -318,6 +317,8 @@ oldengl_xgl_accel_copy_pixels(OldenGLXGLAccel *a, GLcontext *ctx,
         srcx < 0 || srcy < 0 || dstx < 0 || dsty < 0 ||
         srcx > a->width - width || dstx > a->width - width ||
         srcy > a->height - height || dsty > a->height - height)
+        return GL_FALSE;
+    if (!oldengl_xgl_batch_reset(a))
         return GL_FALSE;
     serial = oldengl_xgl_error_serial();
     XSync(a->display, False);
