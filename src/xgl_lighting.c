@@ -50,6 +50,7 @@ GLboolean oldengl_xgl_lighting_eligible(const GLcontext *ctx)
     const struct gl_material *material;
     const struct gl_light *light;
     unsigned int index, channel;
+    GLboolean spot;
     if (!ctx || !ctx->Visual.rgbMode)
         return GL_FALSE;
     if (!ctx->Light.Enabled)
@@ -68,9 +69,27 @@ GLboolean oldengl_xgl_lighting_eligible(const GLcontext *ctx)
         if (!light->Enabled)
             continue;
         if (!unit_rgb(light->Ambient) || !unit_rgb(light->Diffuse) ||
-            !unit_rgb(light->Specular) || light->SpotCutoff != 180.0f ||
+            !unit_rgb(light->Specular) ||
             light->QuadraticAttenuation != 0.0f)
             return GL_FALSE;
+        spot = light->SpotCutoff != 180.0f;
+        if (spot) {
+            /* XGL's spread is twice GL's cone half-angle. Its documented
+             * concentration exponent starts at one; GL also permits zero.
+             * XGL spot lights require a position and have no ambient term.
+             */
+            if (light->EyePosition[3] == 0.0f ||
+                !(light->SpotCutoff >= 0.0f && light->SpotCutoff <= 90.0f) ||
+                !(light->SpotExponent >= 1.0f && light->SpotExponent <= 128.0f))
+                return GL_FALSE;
+            for (channel = 0; channel < 3; ++channel)
+                if (!finite_value(light->EyeDirection[channel]) ||
+                    material->Ambient[channel] * light->Ambient[channel] != 0.0f)
+                    return GL_FALSE;
+            if (light->EyeDirection[0] == 0.0f &&
+                light->EyeDirection[1] == 0.0f && light->EyeDirection[2] == 0.0f)
+                return GL_FALSE;
+        }
         for (channel = 0; channel < 3; ++channel) {
             if (material->Specular[channel] * light->Specular[channel] != 0.0f ||
                 !finite_value(light->EyePosition[channel]))
@@ -183,10 +202,20 @@ GLboolean oldengl_xgl_lighting_configure(OldenGLXGLLighting *lighting,
             position.y = (double)light->EyePosition[1] / light->EyePosition[3];
             position.z = (double)light->EyePosition[2] / light->EyePosition[3];
             xgl_object_set(lighting->lights[slot], XGL_LIGHT_TYPE,
-                XGL_LIGHT_POSITIONAL, XGL_LIGHT_COLOR, &color,
+                light->SpotCutoff == 180.0f ? XGL_LIGHT_POSITIONAL : XGL_LIGHT_SPOT,
+                XGL_LIGHT_COLOR, &color,
                 XGL_LIGHT_POSITION, &position,
                 XGL_LIGHT_ATTENUATION_1, (double)light->ConstantAttenuation,
                 XGL_LIGHT_ATTENUATION_2, (double)light->LinearAttenuation, 0);
+            if (light->SpotCutoff != 180.0f) {
+                direction.x = light->EyeDirection[0];
+                direction.y = light->EyeDirection[1];
+                direction.z = light->EyeDirection[2];
+                xgl_object_set(lighting->lights[slot], XGL_LIGHT_DIRECTION, &direction,
+                    XGL_LIGHT_SPOT_ANGLE, (double)light->SpotCutoff *
+                        0.03490658503988659154,
+                    XGL_LIGHT_SPOT_EXPONENT, (double)light->SpotExponent, 0);
+            }
         }
         ++slot;
     }

@@ -185,7 +185,17 @@ static void attribute_and_guard_tests(GLcontext *ctx)
     oldengl_xgl_tnl_release_batch(&batch);
 #define REJECT(NAME) do { check(!oldengl_xgl_tnl_build_batch(ctx, &f.vb, &batch), NAME); \
     check(!batch.vertices && !batch.commands, "rejected batch retains no temporary allocation"); } while (0)
-    setup(&f, GL_TRIANGLES); f.positions[0][3] = 2; REJECT("homogeneous source w falls back");
+    setup(&f, GL_TRIANGLES);
+    f.positions[0][3] = 2; f.positions[1][3] = 0; f.positions[2][3] = -1;
+    check(oldengl_xgl_tnl_build_batch(ctx, &f.vb, &batch),
+          "finite homogeneous source coordinates reach native preflight");
+    if (batch.vertices)
+        check(batch.vertices[0].position[3] == 2 &&
+              batch.vertices[1].position[3] == 0 && batch.vertices[2].position[3] == -1,
+              "positive, zero and negative source w preserved without division");
+    oldengl_xgl_tnl_release_batch(&batch);
+    setup(&f, GL_TRIANGLES); f.positions[0][3] = (GLfloat)HUGE_VAL;
+    REJECT("nonfinite source w falls back");
     setup(&f, GL_TRIANGLES); f.positions[0][0] = (GLfloat)HUGE_VAL; REJECT("nonfinite source position falls back");
     setup(&f, GL_TRIANGLES); f.flags[0] = VERT_MATERIAL; REJECT("pervertex material flag falls back");
     setup(&f, GL_TRIANGLES); f.flags[0] = VERT_EVAL_C1; REJECT("unevaluated source flag falls back");

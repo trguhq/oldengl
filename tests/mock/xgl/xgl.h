@@ -42,6 +42,7 @@ typedef union {
 typedef struct { Xgl_sgn32 x, y; } Xgl_pt_i2d;
 typedef struct { float x, y, z; } Xgl_pt_f3d;
 typedef struct { double x, y, z; } Xgl_pt_d3d;
+typedef struct { Xgl_pt_d3d pt, normal; } Xgl_plane;
 typedef float Xgl_matrix_f3d[4][4];
 typedef struct { float x, y, z; Xgl_color color; } Xgl_pt_color_f3d;
 typedef struct { float x, y, z; Xgl_color color; Xgl_pt_f3d normal; } Xgl_pt_color_normal_f3d;
@@ -179,7 +180,8 @@ enum {
     XGL_3D_CTX_LIGHT_NUM = 2000, XGL_3D_CTX_LIGHTS, XGL_3D_CTX_LIGHT_SWITCHES,
     XGL_LIGHT_TYPE, XGL_LIGHT_COLOR, XGL_LIGHT_DIRECTION, XGL_LIGHT_POSITION,
     XGL_LIGHT_ATTENUATION_1, XGL_LIGHT_ATTENUATION_2,
-    XGL_LIGHT_AMBIENT, XGL_LIGHT_DIRECTIONAL, XGL_LIGHT_POSITIONAL,
+    XGL_LIGHT_SPOT_ANGLE, XGL_LIGHT_SPOT_EXPONENT,
+    XGL_LIGHT_AMBIENT, XGL_LIGHT_DIRECTIONAL, XGL_LIGHT_POSITIONAL, XGL_LIGHT_SPOT,
     XGL_SURF_COLOR_CONTEXT, XGL_CTX_SURF_FRONT_COLOR,
     XGL_3D_CTX_SURF_FRONT_AMBIENT, XGL_3D_CTX_SURF_FRONT_DIFFUSE,
     XGL_3D_CTX_SURF_FRONT_SPECULAR, XGL_3D_CTX_SURF_FRONT_LIGHT_COMPONENT,
@@ -203,6 +205,17 @@ enum {
     XGL_CLIP_XMIN = 0x1, XGL_CLIP_XMAX = 0x2,
     XGL_CLIP_YMIN = 0x4, XGL_CLIP_YMAX = 0x8,
     XGL_CLIP_ZMIN = 0x10, XGL_CLIP_ZMAX = 0x20
+};
+
+/* Separate synthetic range keeps new model-clip attributes stable. */
+enum {
+    XGL_3D_CTX_MODEL_CLIP_PLANE_NUM = 4000,
+    XGL_3D_CTX_MODEL_CLIP_PLANES
+};
+
+enum {
+    XGL_CTX_LINE_COLOR = 4050, XGL_CTX_MARKER_COLOR,
+    XGL_LINE_COLOR_CONTEXT, XGL_MARKER_COLOR_CONTEXT
 };
 
 Xgl_sys_state xgl_open(Xgl_attribute, ...);

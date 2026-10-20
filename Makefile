@@ -26,7 +26,7 @@ include mk/glx.mk
 MESA_OBJECTS = $(MESA_SOURCES:.c=.o)
 XMESA_OBJECTS = $(XMESA_SOURCES:.c=.o)
 XMESA_ACCEL_OBJECTS = $(XMESA_SOURCES:.c=.xgl.o)
-XGL_OBJECTS = src/xgl_backend.o src/xgl_pixels.o src/xgl_session.o src/xgl_accel.o src/xgl_xmesa.o src/xgl_batch.o src/xgl_lighting.o src/xgl_texture.o src/xgl_tnl.o src/xgl_hybrid.o src/xgl_fragments.o
+XGL_OBJECTS = src/xgl_backend.o src/xgl_pixels.o src/xgl_session.o src/xgl_accel.o src/xgl_xmesa.o src/xgl_batch.o src/xgl_clip.o src/xgl_lighting.o src/xgl_texture.o src/xgl_tnl.o src/xgl_hybrid.o src/xgl_fragments.o
 PUBLIC_HEADERS = include/GL/gl.h include/GL/glext.h include/GL/osmesa.h
 
 software: lib/liboldengl.a lib/liboldengl.so
@@ -71,8 +71,11 @@ src/xgl_accel.o: src/xgl_accel.c src/xgl_accel.h src/xgl_accel_private.h src/xgl
 src/xgl_xmesa.o: src/xgl_xmesa.c src/xgl_accel.h src/xgl_tnl.h src/xgl_session.h $(XMESA_HEADERS) $(MESA_HEADERS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(XMESA_INCLUDES) $(XGL_CPPFLAGS) -c src/xgl_xmesa.c -o $@
 
-src/xgl_batch.o: src/xgl_batch.c src/xgl_accel_private.h src/xgl_tnl.h src/xgl_lighting.h src/xgl_texture.h src/xgl_pixels.h
+src/xgl_batch.o: src/xgl_batch.c src/xgl_accel_private.h src/xgl_tnl.h src/xgl_clip.h src/xgl_lighting.h src/xgl_texture.h src/xgl_pixels.h $(MESA_HEADERS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(XGL_CPPFLAGS) -c src/xgl_batch.c -o $@
+
+src/xgl_clip.o: src/xgl_clip.c src/xgl_clip.h src/xgl_session.h $(MESA_HEADERS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(XGL_CPPFLAGS) -c src/xgl_clip.c -o $@
 
 src/xgl_lighting.o: src/xgl_lighting.c src/xgl_lighting.h src/xgl_session.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(XGL_CPPFLAGS) -c src/xgl_lighting.c -o $@
@@ -144,8 +147,8 @@ test-glx: tests/test_glx
 	./tests/test_glx
 	$(PYTHON) tests/check_glx_api.py lib/libGLsoft.a
 
-tests/test_accel: tests/test_accel.c tests/mock/mock_xgl.c src/xgl_accel.c src/xgl_accel.h src/xgl_batch.c src/xgl_lighting.c src/xgl_texture.c tests/xgl_session_mock.o lib/liboldengl.a
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/mock $(INCLUDES) -Isrc tests/test_accel.c tests/mock/mock_xgl.c src/xgl_accel.c src/xgl_batch.c src/xgl_lighting.c src/xgl_texture.c src/xgl_pixels.c tests/xgl_session_mock.o lib/liboldengl.a $(LDLIBS) -o $@
+tests/test_accel: tests/test_accel.c tests/mock/mock_xgl.c src/xgl_accel.c src/xgl_accel.h src/xgl_batch.c src/xgl_clip.c src/xgl_clip.h src/xgl_lighting.c src/xgl_texture.c tests/xgl_session_mock.o lib/liboldengl.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/mock $(INCLUDES) -Isrc tests/test_accel.c tests/mock/mock_xgl.c src/xgl_accel.c src/xgl_batch.c src/xgl_clip.c src/xgl_lighting.c src/xgl_texture.c src/xgl_pixels.c tests/xgl_session_mock.o lib/liboldengl.a $(LDLIBS) -o $@
 
 tests/test_tnl: tests/test_tnl.c src/xgl_tnl.c src/xgl_tnl.h lib/liboldengl.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) -Isrc -o $@ tests/test_tnl.c src/xgl_tnl.c lib/liboldengl.a $(LDLIBS)
@@ -164,6 +167,18 @@ tests/test_fragments: tests/test_fragments.c src/xgl_fragments.c src/xgl_fragmen
 
 test-fragments: tests/test_fragments
 	./tests/test_fragments
+
+tests/test_clip: tests/test_clip.c src/xgl_clip.c src/xgl_clip.h tests/mock/xgl/xgl.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/mock $(INCLUDES) -Isrc -o $@ tests/test_clip.c src/xgl_clip.c $(LDLIBS)
+
+test-clip: tests/test_clip
+	./tests/test_clip
+
+tests/test_lighting: tests/test_lighting.c src/xgl_lighting.c src/xgl_lighting.h tests/mock/xgl/xgl.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/mock $(INCLUDES) -Isrc -o $@ tests/test_lighting.c src/xgl_lighting.c $(LDLIBS)
+
+test-lighting: tests/test_lighting
+	./tests/test_lighting
 
 test-accel: tests/test_accel
 	./tests/test_accel
@@ -185,8 +200,8 @@ install: xgl install-software
 install-xgl: install
 
 clean:
-	rm -f $(MESA_OBJECTS) $(XMESA_OBJECTS) $(XMESA_ACCEL_OBJECTS) $(XGL_OBJECTS) lib/*.a lib/*.so tests/test_gl tests/test_xgl tests/test_glx tests/test_accel tests/test_tnl tests/test_texture tests/test_fragments tests/test_glx_accel tests/*_mock.o examples/triangle examples/glx_triangle examples/glx_textured_cube
+	rm -f $(MESA_OBJECTS) $(XMESA_OBJECTS) $(XMESA_ACCEL_OBJECTS) $(XGL_OBJECTS) lib/*.a lib/*.so tests/test_gl tests/test_xgl tests/test_glx tests/test_accel tests/test_tnl tests/test_texture tests/test_fragments tests/test_clip tests/test_lighting tests/test_glx_accel tests/*_mock.o examples/triangle examples/glx_triangle examples/glx_textured_cube
 
-.PHONY: all software glx-software xgl example test test-glx test-accel test-tnl test-texture test-fragments test-glx-accel install install-xgl install-software clean
+.PHONY: all software glx-software xgl example test test-glx test-accel test-tnl test-texture test-fragments test-clip test-lighting test-glx-accel install install-xgl install-software clean
 
 $(XMESA_OBJECTS): $(XMESA_HEADERS) $(MESA_HEADERS)

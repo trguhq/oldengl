@@ -2,6 +2,7 @@
  * This recording XGL fixture checks the API contract; it is not hardware.
  */
 #include <stdarg.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +72,8 @@ static void attributes(Xgl_object object, va_list args)
             Xgl_mem_ras *rasters = va_arg(args, Xgl_mem_ras *);
             GLuint i;
             size_t offset = 0;
+            object->width = rasters[0]->width;
+            object->height = rasters[0]->height;
             free(object->pixels);
             object->count = 0;
             for (i = 0; i < object->levels; ++i)
@@ -257,6 +260,52 @@ int main(void)
     ctx->Visual.alphaBits=0; ctx->Texture._ReallyEnabled|=TEXTURE1_2D;
     check(!oldengl_xgl_texture_eligible(ctx), "multiple texture units fall back");
     ctx->Texture._ReallyEnabled=TEXTURE0_2D;
+    ctx->Texture._ReallyEnabled=TEXTURE0_1D;
+    object.Target=GL_TEXTURE_1D; image.Height=1;
+    object.WrapT=GL_CLAMP;
+    check(oldengl_xgl_texture_eligible(ctx),
+        "nonmipmapped 1D texture ignores unused T wrap state");
+    check(oldengl_xgl_texture_coordinates(ctx,input,position,stq) &&
+        stq[0]==0.25f && stq[1]==0.5f && stq[2]==1,
+        "native 1D coordinates use the center of a one-row image");
+    matrix[4]=2; matrix[7]=4;
+    check(oldengl_xgl_texture_coordinates(ctx,input,position,stq) &&
+        stq[0]==1.75f && stq[1]==2 && stq[2]==4,
+        "1D retains T contributions to transformed S and projective Q");
+    matrix[4]=matrix[7]=0;
+    matrix[5]=FLT_MAX; input[1]=2;
+    check(oldengl_xgl_texture_coordinates(ctx,input,position,stq) &&
+        stq[0]==0.25f && stq[1]==0.5f && stq[2]==1,
+        "unused transformed T range does not disable native 1D sampling");
+    matrix[5]=1; input[1]=0.75f;
+    check(oldengl_xgl_texture_configure(state,native,ctx), "upload 1D image to native texture");
+    mipmap=native->texture->descriptor.texture_info.mipmap.texture_map;
+    check(mipmap->width==2 && mipmap->height==1 && mipmap->levels==1 && mipmap->count==2,
+        "native 1D image has one row and exactly the application texels");
+    check(mipmap->pixels[0]==0xff00007fU && mipmap->pixels[1]==0x8000ff00U,
+        "native 1D upload preserves left-to-right RGBA texels");
+    check(native->texture->descriptor.texture_info.mipmap.v_boundary==
+        XGL_TEXTURE_BOUNDARY_CLAMP_BOUNDARY,
+        "unused native 1D T coordinate clamps to its only image row");
+    object.MinFilter=object.MagFilter=GL_LINEAR;
+    check(oldengl_xgl_texture_configure(state,native,ctx) &&
+        native->texture->descriptor.texture_info.mipmap.interp_info.filter1==XGL_TEXTURE_INTERP_BILINEAR,
+        "linear 1D sampling uses native filtering on the single row");
+    for (i=2;i<6;++i) {
+        object.MinFilter=filters[i];
+        check(!oldengl_xgl_texture_eligible(ctx), "1D mipmapped filters retain software sampling");
+    }
+    object.MinFilter=object.MagFilter=GL_NEAREST;
+    object.WrapS=GL_CLAMP;
+    check(!oldengl_xgl_texture_eligible(ctx), "1D GL clamp border semantics retain software sampling");
+    object.WrapS=GL_REPEAT; image.Height=2;
+    check(!oldengl_xgl_texture_eligible(ctx), "native 1D upload requires exactly one image row");
+    image.Height=1; ctx->Visual.alphaBits=8;
+    check(!oldengl_xgl_texture_eligible(ctx) && oldengl_xgl_texture_rgb_eligible(ctx),
+        "1D native RGB capture can retain software framebuffer alpha");
+    ctx->Visual.alphaBits=0; ctx->Texture._ReallyEnabled=TEXTURE0_2D;
+    check(!oldengl_xgl_texture_eligible(ctx), "texture enable and object dimensions must match");
+    object.Target=GL_TEXTURE_2D; image.Height=2; object.WrapT=GL_REPEAT;
     pixels[0]=63; fail_descriptor=1;
     check(!oldengl_xgl_texture_configure(state,native,ctx), "descriptor failure reported before drawing");
     ctx->Texture._ReallyEnabled=0;

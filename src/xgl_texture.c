@@ -96,29 +96,39 @@ static GLboolean texture_eligible(const GLcontext *ctx, GLboolean captured_rgb)
     Xgl_texture_interp_method filter;
     Xgl_texture_boundary boundary;
     GLuint i, levels, width, height;
+    GLboolean one_dimensional;
     if (!ctx) return GL_FALSE;
     if (!ctx->Texture._ReallyEnabled) return GL_TRUE;
     /* Direct rendering cannot retain framebuffer alpha. RGB capture may
      * instead reconstruct that channel in the software fragment stage. */
     if (!ctx->Visual.rgbMode || (!captured_rgb && ctx->Visual.alphaBits) || CHAN_BITS != 8 ||
-        ctx->Texture._ReallyEnabled != TEXTURE0_2D) return GL_FALSE;
+        (ctx->Texture._ReallyEnabled != TEXTURE0_1D &&
+         ctx->Texture._ReallyEnabled != TEXTURE0_2D)) return GL_FALSE;
+    one_dimensional = ctx->Texture._ReallyEnabled == TEXTURE0_1D;
     unit = ctx->Texture.Unit;
     object = unit->_Current;
-    if (!object || !object->Complete || object->Target != GL_TEXTURE_2D ||
+    if (!object || !object->Complete ||
+        object->Target != (one_dimensional ? GL_TEXTURE_1D : GL_TEXTURE_2D) ||
         object->BaseLevel < 0 || object->BaseLevel >= MAX_TEXTURE_LEVELS ||
         object->CompareFlag || object->MaxAnisotropy != 1.0f ||
         unit->LodBias != 0.0f ||
         !filter_method(object->MinFilter, &filter) ||
         (object->MagFilter != GL_NEAREST && object->MagFilter != GL_LINEAR) ||
         !boundary_method(object->WrapS, &boundary) ||
-        !boundary_method(object->WrapT, &boundary)) return GL_FALSE;
+        (!one_dimensional && !boundary_method(object->WrapT, &boundary))) return GL_FALSE;
+    /* A one-row native image implements GL 1D sampling at its row center.
+     * XGL mip pyramids stop when the smaller dimension reaches one, so
+     * GL 1D mip chains must retain software sampling.
+     */
+    if (one_dimensional && mipmapped(object->MinFilter)) return GL_FALSE;
     /* GL's two nearest-mipmap modes with linear magnification switch at
      * lambda 0.5. XGL switches min/mag filters at a one-texel footprint. */
     if (object->MagFilter == GL_LINEAR &&
         (object->MinFilter == GL_NEAREST_MIPMAP_NEAREST ||
          object->MinFilter == GL_NEAREST_MIPMAP_LINEAR)) return GL_FALSE;
     base = object->Image[object->BaseLevel];
-    if (!base || !supported_format(base->Format)) return GL_FALSE;
+    if (!base || !supported_format(base->Format) ||
+        (one_dimensional && base->Height != 1)) return GL_FALSE;
     if (unit->EnvMode != GL_MODULATE && unit->EnvMode != GL_REPLACE &&
         unit->EnvMode != GL_BLEND && unit->EnvMode != GL_DECAL) return GL_FALSE;
     /* GL 1.1 leaves DECAL on alpha/luminance/intensity images undefined.
@@ -347,7 +357,9 @@ GLboolean oldengl_xgl_texture_configure(OldenGLXGLTexture *state,
     mipmap_desc->texture_map = mipmap;
     mipmap_desc->max_u_freq = mipmap_desc->max_v_freq = 1.0f;
     boundary_method(object->WrapS, &mipmap_desc->u_boundary);
-    boundary_method(object->WrapT, &mipmap_desc->v_boundary);
+    if (object->Target == GL_TEXTURE_1D)
+        mipmap_desc->v_boundary = XGL_TEXTURE_BOUNDARY_CLAMP_BOUNDARY;
+    else boundary_method(object->WrapT, &mipmap_desc->v_boundary);
     filter_method(object->MinFilter, &mipmap_desc->interp_info.filter1);
     filter_method(object->MagFilter, &mipmap_desc->interp_info.filter2);
     mipmap_desc->orientation_matrix[0][0] = 1.0f;
@@ -440,10 +452,13 @@ GLboolean oldengl_xgl_texture_coordinates(const GLcontext *ctx,
         transformed[component] = 0;
         for (k = 0; k < 4; ++k)
             transformed[component] += ctx->TextureMatrix[0].m[k*4+component] * generated[k];
-        if (!finite_number(transformed[component])) return GL_FALSE;
+        if (!(ctx->Texture._ReallyEnabled == TEXTURE0_1D &&
+              (component == 1 || component == 2)) &&
+            !finite_number(transformed[component])) return GL_FALSE;
     }
     stq[0] = (GLfloat)transformed[0];
-    stq[1] = (GLfloat)transformed[1];
+    stq[1] = (GLfloat)(ctx->Texture._ReallyEnabled == TEXTURE0_1D ?
+        0.5*transformed[3] : transformed[1]);
     stq[2] = (GLfloat)transformed[3];
     return stq[2] != 0.0f;
 }

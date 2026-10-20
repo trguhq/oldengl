@@ -12,11 +12,13 @@ The following results distinguish software behavior from native XGL execution.
 | `./tests/test_gl` | 93 assertions in 13 behavior groups, using real offscreen rendering |
 | `./tests/test_xgl` | 141 assertions using the real renderer and test-only XGL/Xlib fixtures |
 | `make test-accel` | 40 checks of native raster dispatch and software fallback using a synthetic SDK |
-| `make test-tnl` | 97 checks of object-space primitive expansion, raw attribute import and pre-transform stage dispatch |
-| `make test-texture` | 42 strict-C89 checks of native texture eligibility, image upload, sampling state and coordinate conversion |
+| `make test-tnl` | 99 checks of object-space primitive expansion, raw attribute import and pre-transform stage dispatch |
+| `make test-texture` | 59 strict-C89 checks of native 1D/2D texture eligibility, image upload, sampling state and coordinate conversion |
 | `make test-fragments` | 37 real Mesa checks for captured RGB, reconstructed attributes and ordered alpha/stencil/depth effects |
+| `make test-clip` | 29 checks of native user-plane mapping, half-space orientation, count transitions and error handling |
+| `make test-lighting` | 38 checks of native spotlight mapping, material products, attenuation, compatibility and error handling |
 | `make test-glx` with Xvfb | 91 assertions using real Xlib windows and the software GLX binding |
-| `make test-glx-accel` with Xvfb | 308 checks using real Xlib windows, native XMesa hooks and a synthetic XGL runtime |
+| `make test-glx-accel` with Xvfb | 716 checks using real Xlib windows, native XMesa hooks and a synthetic XGL runtime |
 | `python3 tests/check_glx_api.py lib/libGLsoft.a` | All 39 GLX 1.0–1.4 functions declared and defined |
 | `python3 tests/check_api.py lib/liboldengl.a` | All 336 OpenGL 1.1 functions declared and defined |
 | Same API audit with `lib/liboldengl.so` | All 336 functions in the shared library |
@@ -24,10 +26,12 @@ The following results distinguish software behavior from native XGL execution.
 | Adapter, conversion, fixture and integration-test sanitizers | AddressSanitizer and UndefinedBehaviorSanitizer; renderer archive is not instrumented |
 | SPARC preprocessor configurations | Sun `__sparc`, `__sparc__`, and `sparc` spellings select big-endian packing and C89 float-math fallbacks |
 
-All 849 behavioral assertions/checks pass, excluding the separate API audits.
-The 308 native GLX/hybrid checks and 37 captured-fragment checks also pass
+All 1,343 behavioral assertions/checks pass, excluding the separate API audits.
+The 716 native GLX/hybrid checks and 37 captured-fragment checks also pass
 with ASan/UBSan and leak detection. Those runs instrument the adapter and
 tests; the historical Mesa archive is not instrumented.
+The focused native clipping, lighting and texture suites also pass those
+sanitizers with leak detection.
 
 These are regression checks, not official OpenGL conformance certification.
 An API export audit proves coverage of names, not every possible GL behavior.
@@ -91,6 +95,8 @@ with `OLDENGL_NO_XGL=1`, inspect transformed/clipped geometry, texture
 orientation and filtering, lighting, depth readback, and alternating native
 and software draws. Exercise hybrid alpha/stencil/blending combinations and
 verify hidden-buffer allocation, native Z coverage, and obscured-window copies.
+Compare user clipping, positional spotlights, nonmipmapped 1D texture sampling,
+and flat homogeneous vertices against the explicit software path.
 Repeat with GL_FRONT/GL_BACK, resizing, shared texture updates, and each target
 graphics adapter. Verify the XGL driver actually accelerates the desired
 operations; host fixture results cannot establish it.
@@ -148,6 +154,24 @@ varying-Z `GL_EQUAL` transitions in both software/native directions, capture
 failure replay before any target-buffer commit, `GL_NONE`, multiple draw
 destinations, and independent draw/read drawable state. Triangle Z uses the
 same snapped and stepped interpolation as Mesa while XGL supplies coverage.
+Further native comparisons cover all of the following on front and back
+window buffers:
+
+- User planes applied to points, lines and textured triangles, multiple planes,
+  plane definitions under transformed model/view state, and native clip reset
+  before hybrid capture. Fixture counters require actual native clipping.
+- Positional spotlights with transformed light definitions, varied cone angles,
+  concentration and linear attenuation. Incompatible ambient, specular,
+  quadratic and zero-exponent cases retain Mesa lighting with native coverage.
+- Nonmipmapped 1D sampling with nearest/linear filters, texture matrices, texgen,
+  perspective correction and software alpha blending. Large unused T variation
+  must not change 1D filter selection. Mipmapped 1D, border clamp and varying
+  projective Q retain software sampling.
+- Four-coordinate native points, lines and triangles with positive, zero and
+  negative source W, flat provoking colors and canonical clipping; projective
+  model/view, required fallback combinations, and subsequent vertex color
+  selector restoration are compared with Mesa.
+
 The fixture follows the documented rule that geometry operators do nothing
 in Z-only render mode; native depth probes
 therefore render to the hidden color buffer with normal HLHSR Z writes.

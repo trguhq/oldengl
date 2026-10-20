@@ -40,23 +40,29 @@ not apply to `glCopyPixels`.
 
 | Stage or operation | Native coverage and conditions |
 | --- | --- |
-| Transforms and clipping | Model/view and perspective projection, viewport and depth-range mapping, all six canonical clip planes; source vertex w must be one |
+| Transforms and clipping | Model/view and perspective projection, viewport and depth-range mapping, all six canonical clip planes; user planes for affine model/view matrices |
+| Homogeneous source vertices | Native four-coordinate points for flat, unlit, untextured geometry without user planes, including zero and negative source W; other direct batches require W equal to one |
 | Points | Unit size, unlit and untextured; no smoothing or attenuation |
 | Lines | Unit width, unlit and untextured; no smoothing or stippling |
 | Triangles | Filled front/back polygon modes; no smoothing, stippling or polygon offset |
 | Face culling | GL projected winding is checked on the CPU; accepted vertices still enter XGL in object space |
-| Lighting | Compatible Gouraud ambient/diffuse material lighting, emission and global ambient; directional or positional lights with constant/linear attenuation |
+| Lighting | Compatible Gouraud ambient/diffuse material lighting, emission and global ambient; directional, positional and compatible spot lights with constant/linear attenuation |
 | Depth | All eight GL comparison functions and the depth write mask; 16- or 24-bit Mesa depth storage when the native Z range can represent it |
-| Texture mapping | Eligible unit-zero 2D surface textures with per-pixel perspective correction; details below |
+| Texture mapping | Eligible unit-zero 2D and nonmipmapped 1D surface textures with per-pixel perspective correction; details below |
 | Front color clear | Whole buffer, scissor disabled or covering the drawable, full RGB mask |
 | Front color copy | Same draw/read drawable, identity zoom/transfer, in-bounds rectangle |
 | Back color rendering | A second XGL window buffer must be allocated; retained XMesa color is uploaded and downloaded around native batches |
 
 XGL's lighting equations differ from GL in some cases. Native lighting
-therefore rejects specular contributions, spotlights, quadratic attenuation,
+therefore rejects specular contributions, quadratic attenuation,
 two-sided lighting, color material and separate-specular modes. Local-viewer
 state does not block the supported zero-specular lighting cases.
 Spatially varying positional ambient attenuation also uses software.
+Native positional spotlights require zero effective per-light ambient and
+specular terms, a valid nonzero eye-space direction, and an exponent from
+1 through 128. GL's cone half-angle is converted to XGL's full spread in
+radians. Exponents below XGL's documented minimum, directional spotlights
+and ambient contributions modulated by a spotlight retain Mesa lighting.
 The model/view matrix must be affine, and transformed normals must have unit
 length. With `GL_NORMALIZE`, input normals are conditioned to satisfy XGL's
 unit-normal contract. Nonunit normals without normalization use Mesa.
@@ -66,6 +72,22 @@ Mesa vertices to XGL. Before this path runs, object transforms, clipping,
 lighting, texture maps and native depth state are reset so they cannot be
 applied twice. Thus some scenes with software vertex processing can still
 use eligible XGL raster operations.
+
+`src/xgl_clip.c` converts GL's stored eye-space user plane equations into
+XGL world-space plane points and unit normals. All six user planes can be
+active together; transformed plane definitions keep their original eye-space
+meaning. The native model/view is the GL model/view, so XGL world coordinates
+are GL eye coordinates. Projective model/view matrices and degenerate planes
+retain Mesa clipping. Native user planes are disabled before depth calibration
+and before rasterizing vertices already clipped by Mesa.
+
+Finite homogeneous vertices use `XGL_PT_F3H` when each primitive can use one
+flat context color. Source W reaches XGL unchanged, so canonical clipping and
+perspective division work for vertices at infinity and behind the eye without
+premature division. Provoking colors are set per independent primitive after
+GL primitive decomposition. XGL's colored/normal/data records lack W; smooth,
+lit or textured homogeneous geometry and combinations with user planes retain
+Mesa vertex processing, then use native rasterization where compatible.
 
 ## Hybrid fragment processing
 
@@ -95,7 +117,7 @@ Capturing a whole draw as one image would lose overlapping transparent
 fragments and alpha/stencil side effects. The implementation preserves those
 individual fragments rather than applying effects to a completed image.
 
-Compatible unit-zero 2D RGB texture sampling can remain in XGL. Reconstructed
+Compatible unit-zero 1D or 2D RGB texture sampling can remain in XGL. Reconstructed
 clip W preserves perspective correction after software vertex processing.
 Because XGL does not export framebuffer alpha, Mesa samples the texture for
 alpha, discards that sampling's RGB result, and retains the native RGB result.
@@ -126,7 +148,10 @@ therefore does not itself establish hardware texture acceleration.
 
 The native subset supports:
 
-- Unit-zero `GL_TEXTURE_2D`, with power-of-two, uncompressed, borderless images.
+- Unit-zero `GL_TEXTURE_2D`, and nonmipmapped `GL_TEXTURE_1D`, with power-of-two,
+  uncompressed, borderless images. Native 1D textures use a single image row
+  with T fixed at its center. Texture matrix contributions to S and Q still
+  apply; unused T coordinates and WrapT do not change 1D sampling or filtering.
 - RGB, RGBA, alpha, luminance, luminance-alpha and intensity base formats,
   subject to the GL texture environment's defined combinations.
 - `GL_MODULATE`, `GL_REPLACE`, `GL_BLEND`, and RGB/RGBA `GL_DECAL` environments.
@@ -142,7 +167,7 @@ The native subset supports:
   matrix. The transformed texture q must be the same nonzero value throughout
   a batch; varying projective q uses software.
 
-Textures on points or lines, multiple texture units, 1D/3D/cube textures,
+Textures on points or lines, multiple texture units, mipmapped 1D, 3D/cube textures,
 compressed images, anisotropy, texture comparison and
 unsupported LOD constraints use Mesa texture sampling. Where capture is
 available, this preserves XGL rasterization. Alpha-buffer visuals and effective
@@ -195,6 +220,11 @@ follow the Programmer's Guide, chapter 17: pages 455–459 cover 32-bit
 `0xAABBGGRR` texels and application mip levels; pages 463–465 cover final-color
 composition; pages 468–472 cover filtering, perspective correction and data
 coordinates; and pages 481–483 specify bottom-left texture coordinates.
+The Reference Manual, pages 86–88, defines world-space model clipping planes;
+pages 312–318 and the Programmer's Guide, pages 402–403, define positional
+and spotlight attenuation, cone angles and concentration equations.
+Pages 30 and 46 define homogeneous point lists and their four-coordinate
+records; the context color selectors supply flat colors for these records.
 The Reference Manual, page 234, limits `XGL_RENDER_Z_BUFFER` to raster
 operations: geometry probes and capture use `XGL_RENDER_DRAW_BUFFER`, with
 Z writes controlled by HLHSR. The hidden buffer is never selected for display.

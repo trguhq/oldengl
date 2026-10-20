@@ -4,6 +4,7 @@
 #include "xgl_accel_private.h"
 #include "xgl_tnl.h"
 #include "xgl_pixels.h"
+#include "xgl_clip.h"
 #include <float.h>
 #include <math.h>
 #include <stddef.h>
@@ -50,10 +51,13 @@ GLboolean oldengl_xgl_batch_reset(OldenGLXGLAccel *a)
     xgl_object_set(a->raster, XGL_WIN_RAS_BUF_DRAW, (Xgl_usgn32)0,
         XGL_RAS_SOURCE_BUFFER, XGL_BUFFER_SEL_DRAW, 0);
     xgl_object_set(a->context,
+        XGL_3D_CTX_MODEL_CLIP_PLANE_NUM, (Xgl_usgn32)0,
         XGL_3D_CTX_SURF_FRONT_TMAP_NUM, (Xgl_usgn32)0,
         XGL_3D_CTX_SURF_BACK_TMAP_NUM, (Xgl_usgn32)0, XGL_CTX_CLIP_PLANES, 0,
         XGL_3D_CTX_HLHSR_MODE, XGL_HLHSR_NONE,
         XGL_CTX_RENDER_BUFFER, XGL_RENDER_DRAW_BUFFER,
+        XGL_CTX_LINE_COLOR_SELECTOR, XGL_LINE_COLOR_VERTEX,
+        XGL_CTX_MARKER_COLOR_SELECTOR, XGL_MARKER_COLOR_POINT,
         XGL_CTX_SURF_FRONT_COLOR_SELECTOR, XGL_SURF_COLOR_VERTEX_ILLUM_DEP,
         XGL_3D_CTX_SURF_FRONT_ILLUMINATION, XGL_ILLUM_NONE_INTERP_COLOR, 0);
     return oldengl_xgl_error_serial() == serial;
@@ -64,7 +68,7 @@ static GLboolean common_state(const GLcontext *c)
     return c && c->Visual.rgbMode && !c->Visual.alphaBits &&
         c->Visual.redBits >= 8 && c->Visual.greenBits >= 8 && c->Visual.blueBits >= 8 &&
         c->RenderMode == GL_RENDER && oldengl_xgl_accel_fragment_eligible(c) &&
-        !c->Transform._AnyClip &&
+        oldengl_xgl_clip_eligible(c) &&
         c->Color.ColorMask[0] && c->Color.ColorMask[1] && c->Color.ColorMask[2] &&
         ((c->Color.DriverDrawBuffer == GL_FRONT_LEFT && c->Color.DrawDestMask == FRONT_LEFT_BIT) ||
          (c->Color.DriverDrawBuffer == GL_BACK_LEFT && c->Color.DrawDestMask == BACK_LEFT_BIT)) &&
@@ -127,13 +131,29 @@ static double normal_scale(const GLcontext *c, const struct oldengl_xgl_vertex *
     return 1.0;
 }
 
-static GLboolean preflight(const GLcontext *c, const struct oldengl_xgl_batch *b)
+static GLboolean preflight(const GLcontext *c, const struct oldengl_xgl_batch *b,
+                           GLboolean *homogeneous)
 {
     GLuint i, j;
     GLfloat texture_q = 0.0f;
     if (!common_state(c) || !b || !b->vertices || !b->commands || !b->vertex_count ||
         !b->command_count || !oldengl_xgl_lighting_eligible(c) ||
         !oldengl_xgl_texture_eligible(c)) return GL_FALSE;
+    *homogeneous = GL_FALSE;
+    for (i = 0; i < b->vertex_count; ++i) {
+        for (j = 0; j < 4; ++j)
+            if (!finite_number(b->vertices[i].position[j])) return GL_FALSE;
+        if (b->vertices[i].position[3] != 1.0f) *homogeneous = GL_TRUE;
+    }
+    /* F3H has no per-vertex color, normal or texture data. A context color
+     * preserves flat provoking colors exactly without dehomogenizing input.
+     * Ordinary-WC user clipping at infinity is not assumed equivalent. */
+    if (*homogeneous) {
+        if (c->Light.Enabled || c->Texture._ReallyEnabled ||
+            c->Light.ShadeModel != GL_FLAT) return GL_FALSE;
+        for (i = 0; i < MAX_CLIP_PLANES; ++i)
+            if (c->Transform.ClipEnabled[i]) return GL_FALSE;
+    }
     for (i = 0; i < 16; ++i)
         if (!finite_number(c->ModelView.m[i]) || !finite_number(c->ProjectionMatrix.m[i]))
             return GL_FALSE;
@@ -457,14 +477,14 @@ static GLboolean configure_view(OldenGLXGLAccel *a, const GLcontext *c, double d
 GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
     const struct oldengl_xgl_batch *b, GLubyte *back_rgba)
 {
-    GLboolean back, textured, lighting, success = GL_FALSE;
+    GLboolean back, textured, lighting, homogeneous, success = GL_FALSE;
     char *vertices = NULL;
     size_t stride;
     double depth_bias;
     Xgl_pt_list list;
     GLuint command, i, count;
     unsigned long serial;
-    if (!a || a->failed || !preflight(c, b)) return GL_FALSE;
+    if (!a || a->failed || !preflight(c, b, &homogeneous)) return GL_FALSE;
     back = c->Color.DriverDrawBuffer == GL_BACK_LEFT;
     textured = c->Texture._ReallyEnabled != 0;
     lighting = c->Light.Enabled;
@@ -475,7 +495,7 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
         (c->Visual.depthBits != 16 && c->Visual.depthBits != 24) ||
         a->maximum_z < c->DepthMaxF || a->maximum_z > 16777215.0)) return GL_FALSE;
     if ((back || c->Depth.Test) && !oldengl_xgl_batch_memory(a)) return GL_FALSE;
-    stride = textured ? (lighting ? sizeof(Xgl_pt_color_normal_data_f3d) :
+    stride = homogeneous ? sizeof(Xgl_pt_f3h) : textured ? (lighting ? sizeof(Xgl_pt_color_normal_data_f3d) :
         sizeof(Xgl_pt_color_data_f3d)) + sizeof(float) :
         lighting ? sizeof(Xgl_pt_color_normal_f3d) : sizeof(Xgl_pt_color_f3d);
     if (b->vertex_count > ((size_t)-1)/stride) return GL_FALSE;
@@ -484,6 +504,12 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
     for (i = 0; i < b->vertex_count; ++i) {
         const struct oldengl_xgl_vertex *v = b->vertices+i;
         Xgl_pt_color_f3d *p = (Xgl_pt_color_f3d *)(vertices+i*stride);
+        if (homogeneous) {
+            Xgl_pt_f3h *h = (Xgl_pt_f3h *)(vertices+i*stride);
+            h->x = v->position[0]; h->y = v->position[1];
+            h->z = v->position[2]; h->w = v->position[3];
+            continue;
+        }
         p->x = v->position[0]; p->y = v->position[1]; p->z = v->position[2];
         p->color.rgb.r = unit_color(v->color[0]);
         p->color.rgb.g = unit_color(v->color[1]); p->color.rgb.b = unit_color(v->color[2]);
@@ -504,7 +530,7 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
         }
     }
     /* Preserve flat provoking colors after decomposition, before any draw. */
-    if (!lighting && c->Light.ShadeModel == GL_FLAT) for (command = 0; command < b->command_count; ++command) {
+    if (!homogeneous && !lighting && c->Light.ShadeModel == GL_FLAT) for (command = 0; command < b->command_count; ++command) {
         const struct oldengl_xgl_command *d = b->commands+command;
         GLuint group = d->mode == GL_LINES ? 2 : d->mode == GL_TRIANGLES ? 3 : 1;
         for (i = 0; i < d->count; i += group) {
@@ -528,6 +554,7 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
         xgl_context_flush(a->context, XGL_FLUSH_SYNCHRONIZE);
     }
     if (!depth_upload(a, c) || !configure_view(a, c, depth_bias) ||
+        !oldengl_xgl_clip_configure(a->context, c) ||
         !oldengl_xgl_lighting_configure(a->lighting, a->context, c) ||
         !oldengl_xgl_texture_configure(a->texture, a->context, c) ||
         oldengl_xgl_error_serial() != serial) goto done;
@@ -537,15 +564,31 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
         const struct oldengl_xgl_command *d = b->commands+command;
         GLuint group = d->mode == GL_TRIANGLES ? 3 : d->mode == GL_LINES ? 2 : 1;
         memset(&list, 0, sizeof(list));
-        list.pt_type = textured ? (lighting ? XGL_PT_COLOR_NORMAL_DATA_F3D : XGL_PT_COLOR_DATA_F3D) :
+        list.pt_type = homogeneous ? XGL_PT_F3H : textured ? (lighting ? XGL_PT_COLOR_NORMAL_DATA_F3D : XGL_PT_COLOR_DATA_F3D) :
             lighting ? XGL_PT_COLOR_NORMAL_F3D : XGL_PT_COLOR_F3D;
         list.num_data_values = textured ? 2 : 0;
         for (i = 0; i < d->count; i += count) {
-            count = d->mode == GL_POINTS || (d->mode == GL_TRIANGLES && !c->Polygon.CullFlag) ?
+            count = !homogeneous && (d->mode == GL_POINTS || (d->mode == GL_TRIANGLES && !c->Polygon.CullFlag)) ?
                 d->count : group;
             if (d->mode == GL_TRIANGLES && !visible_triangle(c, b->vertices+d->first+i)) continue;
             list.num_pts = count;
-            if (textured && lighting) list.pts.color_normal_data_f3d =
+            if (homogeneous) {
+                const GLfloat *provoking = b->vertices[d->first+i+group-1].color;
+                Xgl_color flat;
+                memset(&flat, 0, sizeof(flat));
+                flat.rgb.r = unit_color(provoking[0]);
+                flat.rgb.g = unit_color(provoking[1]);
+                flat.rgb.b = unit_color(provoking[2]);
+                xgl_object_set(a->context,
+                    XGL_CTX_SURF_FRONT_COLOR_SELECTOR, XGL_SURF_COLOR_CONTEXT,
+                    XGL_CTX_SURF_FRONT_COLOR, &flat,
+                    XGL_3D_CTX_SURF_FRONT_ILLUMINATION, XGL_ILLUM_NONE,
+                    XGL_CTX_LINE_COLOR_SELECTOR, XGL_LINE_COLOR_CONTEXT,
+                    XGL_CTX_LINE_COLOR, &flat,
+                    XGL_CTX_MARKER_COLOR_SELECTOR, XGL_MARKER_COLOR_CONTEXT,
+                    XGL_CTX_MARKER_COLOR, &flat, 0);
+                list.pts.f3h = (Xgl_pt_f3h *)(vertices+(d->first+i)*stride);
+            } else if (textured && lighting) list.pts.color_normal_data_f3d =
                 (Xgl_pt_color_normal_data_f3d *)(vertices+(d->first+i)*stride);
             else if (textured) list.pts.color_data_f3d =
                 (Xgl_pt_color_data_f3d *)(vertices+(d->first+i)*stride);

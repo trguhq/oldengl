@@ -21,7 +21,9 @@ GLboolean oldengl_xgl_texture_coordinates(const GLcontext *,
 
 /* Coordinates include linear texgen and the GL texture matrix. The caller
  * must check that q is the same nonzero value at every vertex of a batch,
- * then supply (s/q,t/q) as two XGL vertex data values. XGL's texture API has
+ * then supply (s/q,t/q) as two XGL vertex data values. GL 1D uses a one-row
+ * native image with t/q fixed at 0.5 after applying the texture matrix.
+ * XGL's texture API has
  * no projective texture-q input. Use only surface (triangle) primitives.
  * Destroy the native context before this helper: the context owns its TMAP
  * object and this helper owns the MIPMAP_TEXTURE referenced by that TMAP.

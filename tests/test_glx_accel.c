@@ -333,6 +333,191 @@ static void test_lighting(void)
     glDisable(GL_LIGHTING); glDisable(GL_LIGHT0); glDisable(GL_NORMALIZE);
 }
 
+static void test_spotlights(void)
+{
+    GLfloat zero[4] = {0,0,0,1}, white[4] = {1,1,1,1};
+    GLfloat material[4] = {0.8f,0.5f,0.25f,1};
+    GLfloat ambient[4] = {0.3f,0.4f,0.5f,1};
+    GLfloat position[4] = {0,0,2,1}, direction[3] = {0,0,-1};
+    static const GLint sample[4][2] = {{32,20},{24,16},{40,16},{32,40}};
+    GLubyte color[2][4][4];
+    struct MockNativeXGLStats before, after;
+    int scene, pass, i, channel, equal;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix();
+    glDisable(GL_TEXTURE_2D); glDisable(GL_BLEND); glDisable(GL_ALPHA_TEST);
+    glDisable(GL_STENCIL_TEST); glDisable(GL_FOG); glDisable(GL_COLOR_LOGIC_OP);
+    glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE);
+    glDisable(GL_POLYGON_STIPPLE); glDisable(GL_POLYGON_SMOOTH);
+    glDisable(GL_CLIP_PLANE0); glDisable(GL_CLIP_PLANE1);
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS); glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glShadeModel(GL_SMOOTH); glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_NORMALIZE);
+    glDisable(GL_COLOR_MATERIAL); glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,GL_FALSE);
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT,zero);
+    glNormal3f(0,0,1); glClearColor(0,0,0,1); glClearDepth(1);
+    for (scene = 0; scene < 9; ++scene) {
+        for (pass = 0; pass < 2; ++pass) {
+            force_software(pass);
+            glLoadIdentity();
+            if (scene == 2) { glTranslatef(0.2f,0.1f,0); glRotatef(15,0,1,0); }
+            glLightfv(GL_LIGHT0,GL_POSITION,position);
+            glLightfv(GL_LIGHT0,GL_SPOT_DIRECTION,direction);
+            glLoadIdentity();
+            glLightf(GL_LIGHT0,GL_SPOT_CUTOFF,scene == 4 ? 0.0f : scene == 1 ? 25.0f : 35.0f);
+            glLightf(GL_LIGHT0,GL_SPOT_EXPONENT,scene == 5 ? 0.0f : scene == 1 ? 8.0f : 1.0f);
+            glLightf(GL_LIGHT0,GL_CONSTANT_ATTENUATION,scene == 3 ? 1.5f : 1.0f);
+            glLightf(GL_LIGHT0,GL_LINEAR_ATTENUATION,scene == 3 ? 0.2f : 0.0f);
+            glLightf(GL_LIGHT0,GL_QUADRATIC_ATTENUATION,scene == 7 ? 0.25f : 0.0f);
+            glLightfv(GL_LIGHT0,GL_AMBIENT,scene == 6 ? ambient : zero);
+            glLightfv(GL_LIGHT0,GL_DIFFUSE,white);
+            glLightfv(GL_LIGHT0,GL_SPECULAR,scene == 8 ? white : zero);
+            glMaterialfv(GL_FRONT_AND_BACK,GL_AMBIENT,scene == 6 ? ambient : zero);
+            glMaterialfv(GL_FRONT_AND_BACK,GL_DIFFUSE,material);
+            glMaterialfv(GL_FRONT_AND_BACK,GL_SPECULAR,scene == 8 ? white : zero);
+            glMaterialfv(GL_FRONT_AND_BACK,GL_EMISSION,zero);
+            glMaterialf(GL_FRONT_AND_BACK,GL_SHININESS,16);
+            /* Consume Mesa's first-batch material flags before measuring. */
+            triangle(); glFinish();
+            glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            MockNativeXGLGetStats(&before);
+            triangle(); glFinish();
+            if (!pass) {
+                MockNativeXGLGetStats(&after);
+                check(after.triangles > before.triangles,
+                      "spotlit geometry retains native XGL rasterization");
+                check(scene < 5 ? after.spotlit_vertices > before.spotlit_vertices :
+                                  after.spotlit_vertices == before.spotlit_vertices,
+                      "compatible spotlights use XGL lighting; differing equations use Mesa lighting");
+            }
+            for (i = 0; i < 4; ++i)
+                glReadPixels(sample[i][0],sample[i][1],1,1,GL_RGBA,GL_UNSIGNED_BYTE,color[pass][i]);
+            check(glGetError() == GL_NO_ERROR,"spotlight rendering has no GL errors");
+        }
+        equal = 1;
+        for (i = 0; i < 4; ++i) for (channel = 0; channel < 4; ++channel)
+            if (abs((int)color[0][i][channel]-color[1][i][channel]) > 3) equal = 0;
+        check(equal,"native spotlight cone, exponent and attenuation agree with Mesa");
+        if (!equal) fprintf(stderr,"  spotlight scene %d: native=(%u,%u,%u) Mesa=(%u,%u,%u)\n",
+            scene,color[0][0][0],color[0][0][1],color[0][0][2],
+            color[1][0][0],color[1][0][1],color[1][0][2]);
+    }
+    force_software(0);
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glPopAttrib(); glMatrixMode(GL_MODELVIEW);
+}
+
+static void user_clip_scene(int scene)
+{
+    GLdouble plane[4] = {1,0,0,0}, second[4] = {0,1,0,0};
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glDisable(GL_CLIP_PLANE0); glDisable(GL_CLIP_PLANE1);
+    glDisable(GL_TEXTURE_2D); glDisable(GL_BLEND);
+    if (scene == 2) glTranslatef(0.25f,0,0);
+    if (scene == 3) { plane[1] = 1; plane[3] = -0.125; }
+    if (scene == 4) { plane[0] = 0; plane[2] = -1; plane[3] = -0.5; }
+    glClipPlane(GL_CLIP_PLANE0,plane); glEnable(GL_CLIP_PLANE0);
+    glLoadIdentity();
+    if (scene == 1) { glClipPlane(GL_CLIP_PLANE1,second); glEnable(GL_CLIP_PLANE1); }
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    glColor3f(0.25f,0.75f,1);
+    if (scene == 5) {
+        glBegin(GL_POINTS);
+        glVertex2f(-0.4921875f,0.0078125f); glVertex2f(0.5078125f,0.0078125f);
+        glEnd();
+    } else if (scene == 6) {
+        glBegin(GL_LINES);
+        glVertex2f(-0.75f,0.0078125f); glVertex2f(0.75f,0.0078125f);
+        glEnd();
+    } else if (scene == 7) {
+        glEnable(GL_TEXTURE_2D);
+        glBegin(GL_TRIANGLES);
+        glTexCoord2f(0,0); glVertex3f(-0.8f,-0.8f,0);
+        glTexCoord2f(1,0); glVertex3f(0.8f,-0.8f,0);
+        glTexCoord2f(0.5f,1); glVertex3f(0,0.8f,0);
+        glEnd();
+    } else triangle();
+    glFinish();
+}
+
+static void test_user_clipping(void)
+{
+    static const GLint samples[6][2] = {{24,20},{40,20},{32,44},{16,32},{48,32},{40,32}};
+    static const GLubyte texels[16] = {255,128,64,255,255,128,64,255,
+                                     255,128,64,255,255,128,64,255};
+    GLubyte color[2][6][4];
+    GLfloat depth[2];
+    GLuint texture;
+    struct MockNativeXGLStats before, after;
+    int scene, pass, i, channel, equal;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_TEXTURE); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glDisable(GL_LIGHTING); glDisable(GL_ALPHA_TEST); glDisable(GL_STENCIL_TEST);
+    glDisable(GL_FOG); glDisable(GL_COLOR_LOGIC_OP); glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE); glDisable(GL_POLYGON_STIPPLE); glDisable(GL_POLYGON_SMOOTH);
+    glDisable(GL_POINT_SMOOTH); glDisable(GL_LINE_SMOOTH); glDisable(GL_LINE_STIPPLE);
+    glPointSize(1); glLineWidth(1); glShadeModel(GL_SMOOTH);
+    glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glClearColor(0,0,0,1); glClearDepth(1);
+    glGenTextures(1,&texture); glBindTexture(GL_TEXTURE_2D,texture);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,2,2,0,GL_RGBA,GL_UNSIGNED_BYTE,texels);
+    for (scene = 0; scene < 8; ++scene) {
+        for (pass = 0; pass < 2; ++pass) {
+            force_software(pass);
+            MockNativeXGLGetStats(&before);
+            user_clip_scene(scene);
+            if (!pass) {
+                MockNativeXGLGetStats(&after);
+                check(after.model_clip_primitives > before.model_clip_primitives,
+                      "GL user planes clip raw geometry in XGL before projection");
+                if (scene != 4 && scene != 5)
+                    check(after.model_clip_intersections > before.model_clip_intersections,
+                          "native user clipping generates primitive intersections");
+                if (scene == 7)
+                    check(after.texture_samples > before.texture_samples,
+                          "user clipping retains native texture sampling");
+            }
+            for (i = 0; i < 6; ++i)
+                glReadPixels(samples[i][0],samples[i][1],1,1,GL_RGBA,GL_UNSIGNED_BYTE,color[pass][i]);
+            glReadPixels(40,20,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,depth+pass);
+            check(glGetError() == GL_NO_ERROR,"user clipping has no GL errors");
+        }
+        equal = 1;
+        for (i = 0; i < 6; ++i) for (channel = 0; channel < 4; ++channel)
+            if (abs((int)color[0][i][channel]-color[1][i][channel]) > 2) equal = 0;
+        check(equal,"native user-clipped point, line and triangle colors agree with Mesa");
+        if (!equal) fprintf(stderr,"  user clip scene %d differs from Mesa\n",scene);
+        check(fabs(depth[0]-depth[1]) < 0.00001,"native user-clipped depth agrees with Mesa");
+    }
+    force_software(0);
+    glDisable(GL_CLIP_PLANE0); glDisable(GL_CLIP_PLANE1); glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    MockNativeXGLGetStats(&before);
+    glColor4f(1,0,0,0.5f); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles &&
+          after.model_clip_primitives == before.model_clip_primitives,
+          "disabled model clips do not leak into hybrid raster capture");
+    read_color(24,20,128,0,0,"hybrid capture restores pixels previously clipped by native planes");
+    glDeleteTextures(1,&texture);
+    glMatrixMode(GL_TEXTURE); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glPopAttrib(); glMatrixMode(GL_MODELVIEW);
+}
+
 static void textured_quad(GLfloat s0, GLfloat t0, GLfloat s1, GLfloat t1)
 {
     glBegin(GL_QUADS);
@@ -350,6 +535,208 @@ static void textured_perspective_triangle(void)
     glTexCoord2f(1,0); glVertex3f(1.5f,-1.0f,-2);
     glTexCoord2f(0.5f,1); glVertex3f(0,2.0f,-5);
     glEnd(); glFinish();
+}
+
+static void test_texture_1d(void)
+{
+    static const GLubyte base[16] = {255,0,0,64,0,255,0,128,
+                                    0,0,255,192,255,255,255,255};
+    static const GLubyte middle[8] = {128,0,255,128,0,128,255,255};
+    static const GLubyte last[4] = {0,0,255,255};
+    static const GLint samples[4][2] = {{25,15},{38,20},{30,35},{34,40}};
+    GLfloat matrix[16], s_plane[4] = {0.5f,0,0,0.5f};
+    GLubyte color[2][4][4];
+    GLuint texture;
+    struct MockNativeXGLStats before, after;
+    int scene, pass, i, channel, equal;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_PROJECTION); glPushMatrix();
+    glMatrixMode(GL_TEXTURE); glPushMatrix();
+    glDisable(GL_LIGHTING); glDisable(GL_STENCIL_TEST); glDisable(GL_ALPHA_TEST);
+    glDisable(GL_FOG); glDisable(GL_COLOR_LOGIC_OP); glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE); glDisable(GL_POLYGON_STIPPLE); glDisable(GL_POLYGON_SMOOTH);
+    glDisable(GL_CLIP_PLANE0); glDisable(GL_CLIP_PLANE1);
+    glDisable(GL_TEXTURE_2D); glEnable(GL_TEXTURE_1D);
+    glDisable(GL_TEXTURE_GEN_T); glDisable(GL_TEXTURE_GEN_R); glDisable(GL_TEXTURE_GEN_Q);
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS); glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glPolygonMode(GL_FRONT_AND_BACK,GL_FILL); glShadeModel(GL_SMOOTH);
+    glGenTextures(1,&texture); glBindTexture(GL_TEXTURE_1D,texture);
+    glTexImage1D(GL_TEXTURE_1D,0,GL_RGBA,4,0,GL_RGBA,GL_UNSIGNED_BYTE,base);
+    glTexImage1D(GL_TEXTURE_1D,1,GL_RGBA,2,0,GL_RGBA,GL_UNSIGNED_BYTE,middle);
+    glTexImage1D(GL_TEXTURE_1D,2,GL_RGBA,1,0,GL_RGBA,GL_UNSIGNED_BYTE,last);
+    glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+    glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+    glClearColor(0.125f,0.25f,0.5f,1); glClearDepth(1);
+    for (scene = 0; scene < 9; ++scene) {
+        for (pass = 0; pass < 2; ++pass) {
+            force_software(pass);
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            if (scene == 2) glFrustum(-1,1,-1,1,1,10);
+            glMatrixMode(GL_TEXTURE); glLoadIdentity();
+            if (scene == 1) {
+                memset(matrix,0,sizeof(matrix));
+                matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1;
+                matrix[4] = 0.25f; glLoadMatrixf(matrix);
+            }
+            glMatrixMode(GL_MODELVIEW);
+            glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_MIN_FILTER,
+                scene == 5 ? GL_NEAREST_MIPMAP_NEAREST : scene == 1 || scene == 3 ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_MAG_FILTER,
+                scene == 1 || scene == 3 || scene == 8 ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_1D,GL_TEXTURE_WRAP_S,scene == 6 ? GL_CLAMP : GL_REPEAT);
+            if (scene == 7) {
+                glTexGeni(GL_S,GL_TEXTURE_GEN_MODE,GL_OBJECT_LINEAR);
+                glTexGenfv(GL_S,GL_OBJECT_PLANE,s_plane); glEnable(GL_TEXTURE_GEN_S);
+            } else glDisable(GL_TEXTURE_GEN_S);
+            if (scene == 3 || scene == 4 || scene == 5 || scene == 6 || scene == 8) {
+                glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+            } else glDisable(GL_BLEND);
+            glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            glColor4f(0.5f,0.8f,1,0.75f);
+            MockNativeXGLGetStats(&before);
+            if (scene == 2) textured_perspective_triangle();
+            else {
+                GLfloat scale = scene == 5 ? 64.0f : 1.0f;
+                glBegin(GL_TRIANGLES);
+                glTexCoord4f(scene == 8 ? 0.37f : 0.03f*scale,
+                    scene == 8 ? -1000.0f : -0.5f,0,1);
+                glVertex3f(-0.8f,-0.8f,0);
+                glTexCoord4f(scene == 8 ? 0.37f : 0.94f*scale,
+                    scene == 8 ? 1000.0f : 0.5f,0,scene == 4 ? 2.0f : 1.0f);
+                glVertex3f(0.8f,-0.8f,0);
+                glTexCoord4f(scene == 8 ? 0.37f : 0.51f*scale,0,0,scene == 4 ? 1.5f : 1.0f);
+                glVertex3f(0,0.8f,0);
+                glEnd(); glFinish();
+            }
+            if (!pass) {
+                MockNativeXGLGetStats(&after);
+                check(after.triangles > before.triangles,"1D textured geometry retains XGL rasterization");
+                check(scene == 4 || scene == 5 || scene == 6 ?
+                    after.texture_samples == before.texture_samples : after.texture_samples > before.texture_samples,
+                    "compatible 1D RGB sampling uses XGL; unsupported modes use software sampling");
+            }
+            for (i = 0; i < 4; ++i)
+                glReadPixels(samples[i][0],samples[i][1],1,1,GL_RGBA,GL_UNSIGNED_BYTE,color[pass][i]);
+            check(glGetError() == GL_NO_ERROR,"1D texture rendering has no GL errors");
+        }
+        equal = 1;
+        for (i = 0; i < 4; ++i) for (channel = 0; channel < 4; ++channel)
+            if (abs((int)color[0][i][channel]-color[1][i][channel]) > 3) equal = 0;
+        check(equal,"native 1D texture RGB and software alpha agree with Mesa");
+        if (!equal) fprintf(stderr,"  1D texture scene %d differs from Mesa\n",scene);
+    }
+    force_software(0); glDeleteTextures(1,&texture);
+    glMatrixMode(GL_TEXTURE); glPopMatrix();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    glPopAttrib(); glMatrixMode(GL_MODELVIEW);
+}
+
+static void homogeneous_scene(int scene)
+{
+    static const GLdouble clip[4] = {1,0,0,0};
+    GLfloat model[16];
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glDisable(GL_CLIP_PLANE0); glDisable(GL_LIGHTING);
+    glShadeModel(scene == 7 || scene == 10 ? GL_SMOOTH : GL_FLAT);
+    if (scene == 6) {
+        memset(model,0,sizeof(model));
+        model[0] = model[5] = model[10] = model[15] = 1;
+        model[3] = 0.25f; glLoadMatrixf(model);
+    }
+    if (scene == 8) glEnable(GL_LIGHTING);
+    if (scene == 9) { glClipPlane(GL_CLIP_PLANE0,clip); glEnable(GL_CLIP_PLANE0); }
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    if (scene == 11) {
+        glBegin(GL_POINTS);
+        glColor3f(1,0,0); glVertex2f(-0.4921875f,0.0078125f);
+        glColor3f(0,1,0); glVertex2f(0.5078125f,0.0078125f);
+        glEnd();
+    } else if (scene == 12) {
+        glBegin(GL_LINES);
+        glColor3f(1,0,0); glVertex2f(-0.75f,0.0078125f);
+        glColor3f(0,1,0); glVertex2f(0.75f,0.0078125f);
+        glEnd();
+    } else if (scene == 4) {
+        glBegin(GL_POINTS);
+        glColor3f(1,0,0); glVertex4f(-0.984375f,0.015625f,0,2);
+        glColor3f(0,1,0); glVertex4f(1.5234375f,0.0234375f,0,3);
+        glEnd();
+    } else if (scene == 5) {
+        glBegin(GL_LINES);
+        glColor3f(1,0,0); glVertex4f(-1.5f,0.015625f,0,2);
+        glColor3f(0,1,0); glVertex4f(0.375f,0.00390625f,0,0.5f);
+        glEnd();
+    } else if (scene == 10) {
+        glBegin(GL_TRIANGLES);
+        glColor3f(1,0,0); glVertex3f(-0.8f,-0.8f,0);
+        glColor3f(0,1,0); glVertex3f(0.8f,-0.8f,0);
+        glColor3f(0,0,1); glVertex3f(0,0.8f,0);
+        glEnd();
+    } else {
+        glBegin(GL_TRIANGLES);
+        glColor3f(1,0,0); glVertex4f(-1.6f,-1.6f,0,2);
+        glColor3f(0,1,0);
+        if (scene == 0) glVertex4f(1.6f,-1.6f,0,2);
+        else glVertex4f(0.8f,-0.8f,0,1);
+        glColor3f(0,0,1);
+        if (scene == 0) glVertex4f(0,1.6f,0,2);
+        else if (scene == 2) glVertex4f(0,0.8f,0,0);
+        else if (scene == 3) glVertex4f(0,0.4f,0,-0.5f);
+        else glVertex4f(0,2.4f,0,3);
+        glEnd();
+    }
+    glFinish();
+}
+
+static void test_homogeneous_geometry(void)
+{
+    static const GLint samples[6][2] = {{24,20},{40,20},{32,44},{16,32},{48,32},{40,32}};
+    GLubyte color[2][6][4];
+    GLfloat depth[2];
+    struct MockNativeXGLStats before, after;
+    int scene, pass, i, channel, equal;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_TEXTURE_1D); glDisable(GL_TEXTURE_2D); glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST); glDisable(GL_STENCIL_TEST); glDisable(GL_FOG);
+    glDisable(GL_COLOR_LOGIC_OP); glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE);
+    glDisable(GL_CLIP_PLANE1); glDisable(GL_POLYGON_STIPPLE); glDisable(GL_POLYGON_SMOOTH);
+    glDisable(GL_POINT_SMOOTH); glDisable(GL_LINE_SMOOTH); glDisable(GL_LINE_STIPPLE);
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS); glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glPolygonMode(GL_FRONT_AND_BACK,GL_FILL); glPointSize(1); glLineWidth(1);
+    glClearColor(0,0,0,1); glClearDepth(1);
+    for (scene = 0; scene < 13; ++scene) {
+        for (pass = 0; pass < 2; ++pass) {
+            force_software(pass);
+            MockNativeXGLGetStats(&before);
+            homogeneous_scene(scene);
+            if (!pass) {
+                MockNativeXGLGetStats(&after);
+                check(scene < 7 ? after.homogeneous_vertices > before.homogeneous_vertices :
+                                  after.homogeneous_vertices == before.homogeneous_vertices,
+                      "compatible flat homogeneous geometry uses native XGL four-coordinate points");
+            }
+            for (i = 0; i < 6; ++i)
+                glReadPixels(samples[i][0],samples[i][1],1,1,GL_RGBA,GL_UNSIGNED_BYTE,color[pass][i]);
+            glReadPixels(40,20,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,depth+pass);
+            check(glGetError() == GL_NO_ERROR,"homogeneous geometry has no GL errors");
+        }
+        equal = 1;
+        for (i = 0; i < 6; ++i) for (channel = 0; channel < 4; ++channel)
+            if (abs((int)color[0][i][channel]-color[1][i][channel]) > 3) equal = 0;
+        check(equal,"homogeneous native clipping, flat colors and selector reset agree with Mesa");
+        check(fabs(depth[0]-depth[1]) < 0.00001,"homogeneous native depth agrees with Mesa");
+        if (!equal) fprintf(stderr,"  homogeneous geometry scene %d differs from Mesa\n",scene);
+    }
+    force_software(0);
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glPopAttrib(); glMatrixMode(GL_MODELVIEW);
 }
 
 static void test_texture(void)
@@ -1065,7 +1452,11 @@ int main(void)
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
     test_depth();
     test_lighting();
+    test_user_clipping();
+    test_spotlights();
     test_texture();
+    test_texture_1d();
+    test_homogeneous_geometry();
     test_hybrid_effects();
     test_hybrid_points_lines();
 
@@ -1118,6 +1509,10 @@ int main(void)
             test_hybrid_points_lines();
             test_hybrid_destinations();
             test_hybrid_split_buffers(display,back_visual,windows[2],contexts[2]);
+            test_user_clipping();
+            test_spotlights();
+            test_texture_1d();
+            test_homogeneous_geometry();
         }
         XFree(back_visual);
     }

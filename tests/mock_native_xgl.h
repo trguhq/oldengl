@@ -5,7 +5,10 @@
 struct MockNativeXGLStats {
     unsigned long points, lines, triangles, clears, copies;
     unsigned long transforms, lights, depth_tests, swaps;
+    unsigned long spotlit_vertices;
     unsigned long texture_maps, mipmaps, texture_samples;
+    unsigned long model_clip_primitives, model_clip_intersections;
+    unsigned long homogeneous_vertices;
     unsigned long uploads, downloads, synchronizes;
     unsigned long opens, closes, live_objects, injected_errors;
 };

@@ -262,7 +262,8 @@ GLboolean oldengl_xgl_fragments_prepare(GLcontext *ctx, GLenum mode,
         }
         setup->rho[unit] =
             (ds[0]*ds[0]+ds[1]*ds[1])*image->Width*image->Width+
-            (dt[0]*dt[0]+dt[1]*dt[1])*image->Height*image->Height;
+            (object->Target == GL_TEXTURE_1D ? 0.0 :
+             (dt[0]*dt[0]+dt[1]*dt[1])*image->Height*image->Height);
     }
     if (mode == GL_TRIANGLES && (ctx->Depth.Test ||
         (ctx->Fog.Enabled && SWRAST_CONTEXT(ctx)->_PreferPixelFog))) {
@@ -330,7 +331,9 @@ void oldengl_xgl_fragments_emit_span(struct oldengl_xgl_fragment_setup *setup,
                 work->r[unit][i] = coordinate[2];
             }
         }
-        if (setup->texture_rgb_complete && ctx->Texture._ReallyEnabled == TEXTURE0_2D) {
+        if (setup->texture_rgb_complete &&
+            (ctx->Texture._ReallyEnabled == TEXTURE0_1D ||
+             ctx->Texture._ReallyEnabled == TEXTURE0_2D)) {
             /* XGL supplies textured RGB, but its raster does not export
              * alpha. Sample the existing software texture pipeline for
              * alpha and retain the native RGB; no GL state is modified. */

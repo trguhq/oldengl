@@ -37,8 +37,10 @@ Do not link a second GL implementation into the application.
 Native XGL window rendering accepts object-space vertices before Mesa's
 transform and lighting stages. Eligible geometry uses XGL transformations,
 clipping, ambient/diffuse lighting, depth testing and per-pixel texture
-mapping. When a fragment effect cannot use that direct path, the hybrid path
-rasterizes Mesa-processed vertices with XGL into a hidden buffer, then sends
+mapping. Affine user clipping planes, compatible positional spotlights,
+flat unlit homogeneous vertices and nonmipmapped 1D textures can also use XGL.
+When a fragment effect cannot use that direct path, the hybrid path rasterizes
+Mesa-processed vertices with XGL into a hidden buffer, then sends
 covered spans through Mesa fragment processing. Alpha tests, stencil/depth,
 fog, real blending, logic operations, masks and polygon stipple can therefore
 retain native rasterization. Ordinary OpenGL texture objects, uploads,

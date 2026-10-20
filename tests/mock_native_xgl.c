@@ -20,6 +20,7 @@
 #define MOCK_TMAP 10003
 #define MOCK_MAX_LIGHTS 16
 #define MOCK_MAX_LEVELS 16
+#define MOCK_MAX_CLIP_PLANES 6
 
 struct oldengl_mock_xgl {
     int type, width, height, depth, color_type;
@@ -37,12 +38,15 @@ struct oldengl_mock_xgl {
     double matrix[4][4];
     int clip_flags;
     Xgl_bounds_d3d clip_bounds;
+    Xgl_plane model_clip_planes[MOCK_MAX_CLIP_PLANES];
+    int model_clip_count;
     Xgl_object lights[MOCK_MAX_LIGHTS];
     Xgl_boolean light_switches[MOCK_MAX_LIGHTS];
     int light_count, light_type;
     Xgl_color light_color;
     double light_direction[3], light_position[3];
     double attenuation_constant, attenuation_linear;
+    double spot_angle, spot_exponent;
     double ambient_coefficient, diffuse_coefficient;
     Xgl_object tmap;
     int tmap_enabled, texture_levels;
@@ -52,6 +56,8 @@ struct oldengl_mock_xgl {
     void (*notify)(Xgl_sys_state);
     int illumination, line_interp;
     Xgl_color background;
+    Xgl_color surface_color, line_color, marker_color;
+    int surface_color_selector, line_color_selector, marker_color_selector;
     Xgl_marker marker;
     Xgl_bounds_d3d viewport, vdc_window;
     int viewport_set;
@@ -277,6 +283,15 @@ static void attributes(Xgl_object object, va_list args)
             object->clip_bounds = *va_arg(args, Xgl_bounds_d3d *); break;
         case XGL_CTX_CLIP_PLANES:
             object->clip_flags = va_arg(args, int); break;
+        case XGL_3D_CTX_MODEL_CLIP_PLANE_NUM:
+            object->model_clip_count = (int)va_arg(args, Xgl_usgn32);
+            assert(object->model_clip_count >= 0 &&
+                   object->model_clip_count <= MOCK_MAX_CLIP_PLANES);
+            break;
+        case XGL_3D_CTX_MODEL_CLIP_PLANES:
+            memcpy(object->model_clip_planes, va_arg(args, Xgl_plane *),
+                   (size_t)object->model_clip_count*sizeof(Xgl_plane));
+            break;
         case XGL_WIN_RAS_BUFFERS_REQUESTED:
             object->buffers = va_arg(args, int);
             if (object->buffers > 2) object->buffers = 2;
@@ -354,6 +369,8 @@ static void attributes(Xgl_object object, va_list args)
                     object->lights[i] = (Xgl_object)calloc(1, sizeof(*object));
                     assert(object->lights[i]); object->lights[i]->type = MOCK_LIGHT;
                     object->lights[i]->attenuation_constant = 1;
+                    object->lights[i]->spot_angle = 3.14159265358979323846;
+                    object->lights[i]->spot_exponent = 1;
                     ++stats.live_objects; ++stats.lights;
                 }
             }
@@ -380,10 +397,23 @@ static void attributes(Xgl_object object, va_list args)
         }
         case XGL_LIGHT_ATTENUATION_1: object->attenuation_constant = va_arg(args, double); break;
         case XGL_LIGHT_ATTENUATION_2: object->attenuation_linear = va_arg(args, double); break;
+        case XGL_LIGHT_SPOT_ANGLE: object->spot_angle = va_arg(args, double); break;
+        case XGL_LIGHT_SPOT_EXPONENT: object->spot_exponent = va_arg(args, double); break;
         case XGL_3D_CTX_SURF_FRONT_AMBIENT: object->ambient_coefficient = va_arg(args, double); break;
         case XGL_3D_CTX_SURF_FRONT_DIFFUSE: object->diffuse_coefficient = va_arg(args, double); break;
         case XGL_3D_CTX_SURF_FRONT_SPECULAR: (void)va_arg(args, double); break;
-        case XGL_CTX_SURF_FRONT_COLOR: (void)va_arg(args, Xgl_color *); break;
+        case XGL_CTX_SURF_FRONT_COLOR:
+            object->surface_color = *va_arg(args, Xgl_color *); break;
+        case XGL_CTX_LINE_COLOR:
+            object->line_color = *va_arg(args, Xgl_color *); break;
+        case XGL_CTX_MARKER_COLOR:
+            object->marker_color = *va_arg(args, Xgl_color *); break;
+        case XGL_CTX_SURF_FRONT_COLOR_SELECTOR:
+            object->surface_color_selector = va_arg(args, int); break;
+        case XGL_CTX_LINE_COLOR_SELECTOR:
+            object->line_color_selector = va_arg(args, int); break;
+        case XGL_CTX_MARKER_COLOR_SELECTOR:
+            object->marker_color_selector = va_arg(args, int); break;
         case XGL_3D_CTX_SURF_FRONT_LIGHT_COMPONENT:
         case XGL_3D_CTX_SURF_FACE_DISTINGUISH:
         case XGL_3D_CTX_SURF_LIGHTING_NORMAL_FLIP:
@@ -396,11 +426,8 @@ static void attributes(Xgl_object object, va_list args)
         case XGL_CTX_VDC_MAP:
         case XGL_CTX_VDC_ORIENTATION:
         case XGL_3D_CTX_SURF_FACE_CULL:
-        case XGL_CTX_LINE_COLOR_SELECTOR:
-        case XGL_CTX_MARKER_COLOR_SELECTOR:
         case XGL_CTX_SURF_FRONT_FILL_STYLE:
         case XGL_CTX_SURF_EDGE_FLAG:
-        case XGL_CTX_SURF_FRONT_COLOR_SELECTOR:
         case XGL_CTX_NEW_FRAME_ACTION:
         case XGL_CTX_LINE_STYLE:
             (void)va_arg(args, int); break;
@@ -641,6 +668,7 @@ void xgl_context_new_frame(Xgl_ctx context)
 
 struct transformed_vertex {
     double position[4];
+    double world[4];
     double texture[2], inverse_w;
     Xgl_color color;
 };
@@ -698,7 +726,8 @@ static Xgl_color illuminate(Xgl_ctx context, const double eye[4], const double n
             if (light->light_type == XGL_LIGHT_DIRECTIONAL) {
                 for (j = 0; j < 3; ++j) direction[j] = -light->light_direction[j];
             } else {
-                assert(light->light_type == XGL_LIGHT_POSITIONAL);
+                assert(light->light_type == XGL_LIGHT_POSITIONAL ||
+                       light->light_type == XGL_LIGHT_SPOT);
                 for (j = 0; j < 3; ++j) direction[j] = light->light_position[j]-eye[j]/eye[3];
             }
             distance = sqrt(direction[0]*direction[0]+direction[1]*direction[1]+direction[2]*direction[2]);
@@ -707,8 +736,22 @@ static Xgl_color illuminate(Xgl_ctx context, const double eye[4], const double n
                 for (j = 0; j < 3; ++j) amount += n[j]*direction[j]/distance;
             if (amount < 0) amount = 0;
             amount *= context->diffuse_coefficient;
-            if (light->light_type == XGL_LIGHT_POSITIONAL)
+            if (light->light_type == XGL_LIGHT_POSITIONAL ||
+                light->light_type == XGL_LIGHT_SPOT)
                 amount /= light->attenuation_constant+light->attenuation_linear*distance;
+            if (light->light_type == XGL_LIGHT_SPOT && distance > 0) {
+                double length = 0, cosine = 0;
+                ++stats.spotlit_vertices;
+                for (j = 0; j < 3; ++j) {
+                    length += light->light_direction[j]*light->light_direction[j];
+                    cosine -= light->light_direction[j]*direction[j]/distance;
+                }
+                length = sqrt(length);
+                assert(length > 0);
+                cosine /= length;
+                if (cosine < cos(light->spot_angle*0.5)) amount = 0;
+                else amount *= pow(cosine > 1 ? 1 : cosine, light->spot_exponent);
+            }
         }
         sum[0] += amount*light->light_color.rgb.r;
         sum[1] += amount*light->light_color.rgb.g;
@@ -721,7 +764,7 @@ static Xgl_color illuminate(Xgl_ctx context, const double eye[4], const double n
 }
 
 static struct transformed_vertex vertex_at(Xgl_ctx context,
-                                            const Xgl_pt_list *list, unsigned int index)
+    const Xgl_pt_list *list, unsigned int index, const Xgl_color *context_color)
 {
     struct transformed_vertex result;
     double input[4], eye[4], normal[3] = {0, 0, 1};
@@ -731,7 +774,14 @@ static struct transformed_vertex vertex_at(Xgl_ctx context,
     assert(index < list->num_pts);
     result.texture[0] = result.texture[1] = 0;
     result.inverse_w = 1;
-    if (list->pt_type == XGL_PT_COLOR_NORMAL_F3D ||
+    input[3] = 1;
+    if (list->pt_type == XGL_PT_F3H) {
+        const Xgl_pt_f3h *p = list->pts.f3h + index;
+        input[0] = p->x; input[1] = p->y; input[2] = p->z; input[3] = p->w;
+        assert(context_color);
+        result.color = *context_color;
+        ++stats.homogeneous_vertices;
+    } else if (list->pt_type == XGL_PT_COLOR_NORMAL_F3D ||
         list->pt_type == XGL_PT_COLOR_NORMAL_DATA_F3D) {
         Xgl_pt_color_normal_f3d *p;
         if (list->pt_type == XGL_PT_COLOR_NORMAL_DATA_F3D) {
@@ -763,8 +813,9 @@ static struct transformed_vertex vertex_at(Xgl_ctx context,
         input[0] = p->x; input[1] = p->y; input[2] = p->z;
         result.color = p->color;
     }
-    input[3] = 1;
+    if (context_color) result.color = *context_color;
     multiply(eye, input, context->local_model);
+    memcpy(result.world, eye, sizeof(result.world));
     if (context->illumination == XGL_ILLUM_PER_VERTEX && context->light_count) {
         assert(list->pt_type == XGL_PT_COLOR_NORMAL_F3D ||
                list->pt_type == XGL_PT_COLOR_NORMAL_DATA_F3D);
@@ -776,6 +827,13 @@ static struct transformed_vertex vertex_at(Xgl_ctx context,
 
 static double clip_distance(const struct transformed_vertex *v, Xgl_ctx context, int plane)
 {
+    if (plane < context->model_clip_count) {
+        const Xgl_plane *model = context->model_clip_planes + plane;
+        return model->normal.x*(v->world[0]-model->pt.x*v->world[3]) +
+            model->normal.y*(v->world[1]-model->pt.y*v->world[3]) +
+            model->normal.z*(v->world[2]-model->pt.z*v->world[3]);
+    }
+    plane -= context->model_clip_count;
     switch (plane) {
     case 0: return v->position[0] - context->clip_bounds.xmin*v->position[3];
     case 1: return context->clip_bounds.xmax*v->position[3] - v->position[0];
@@ -786,12 +844,21 @@ static double clip_distance(const struct transformed_vertex *v, Xgl_ctx context,
     }
 }
 
+static int clip_enabled(Xgl_ctx context, int plane)
+{
+    return plane < context->model_clip_count ||
+        (context->clip_flags & (1 << (plane-context->model_clip_count)));
+}
+
 static struct transformed_vertex interpolate(struct transformed_vertex a,
                                              struct transformed_vertex b, double amount)
 {
     struct transformed_vertex result;
     int i;
-    for (i = 0; i < 4; ++i) result.position[i] = a.position[i] + amount*(b.position[i]-a.position[i]);
+    for (i = 0; i < 4; ++i) {
+        result.position[i] = a.position[i] + amount*(b.position[i]-a.position[i]);
+        result.world[i] = a.world[i] + amount*(b.world[i]-a.world[i]);
+    }
     for (i = 0; i < 2; ++i) result.texture[i] = a.texture[i]+amount*(b.texture[i]-a.texture[i]);
     result.inverse_w = 1;
     result.color.rgb.r = (float)(a.color.rgb.r + amount*(b.color.rgb.r-a.color.rgb.r));
@@ -822,10 +889,14 @@ void xgl_multimarker(Xgl_ctx context, Xgl_pt_list *points)
     if (!(context->render_buffer & XGL_RENDER_DRAW_BUFFER)) return;
     surface_begin(&s, context->device);
     for (i = 0; i < points->num_pts; ++i) {
-        vertex = vertex_at(context, points, i);
+        if (points->pt_type == XGL_PT_F3H)
+            assert(context->marker_color_selector == XGL_MARKER_COLOR_CONTEXT);
+        vertex = vertex_at(context, points, i,
+            context->marker_color_selector == XGL_MARKER_COLOR_CONTEXT ? &context->marker_color : NULL);
+        if (context->model_clip_count) ++stats.model_clip_primitives;
         outside = 0;
-        for (plane = 0; plane < 6; ++plane)
-            if ((context->clip_flags & (1 << plane)) && clip_distance(&vertex, context, plane) < 0)
+        for (plane = 0; plane < 6+context->model_clip_count; ++plane)
+            if (clip_enabled(context, plane) && clip_distance(&vertex, context, plane) < 0)
                 outside = 1;
         if (outside || !project(&vertex)) continue;
         write_pixel(&s, context, (int)floor(vertex.position[0]+0.5),
@@ -849,12 +920,20 @@ void xgl_multipolyline(Xgl_ctx context, Xgl_bbox *bbox, Xgl_usgn32 count,
     surface_begin(&s, context->device);
     for (i = 0; i < count; ++i)
         for (j = 0; j+1 < points[i].num_pts; ++j) {
-            a = vertex_at(context, points+i, j); b = vertex_at(context, points+i, j+1);
+            if (points[i].pt_type == XGL_PT_F3H)
+                assert(context->line_color_selector == XGL_LINE_COLOR_CONTEXT);
+            a = vertex_at(context, points+i, j,
+                context->line_color_selector == XGL_LINE_COLOR_CONTEXT ? &context->line_color : NULL);
+            b = vertex_at(context, points+i, j+1,
+                context->line_color_selector == XGL_LINE_COLOR_CONTEXT ? &context->line_color : NULL);
+            if (context->model_clip_count) ++stats.model_clip_primitives;
             outside = 0;
-            for (plane = 0; plane < 6; ++plane) {
-                if (!(context->clip_flags & (1 << plane))) continue;
+            for (plane = 0; plane < 6+context->model_clip_count; ++plane) {
+                if (!clip_enabled(context, plane)) continue;
                 da = clip_distance(&a, context, plane); db = clip_distance(&b, context, plane);
                 if (da < 0 && db < 0) { outside = 1; break; }
+                if ((da < 0) != (db < 0) && plane < context->model_clip_count)
+                    ++stats.model_clip_intersections;
                 if (da < 0) a = interpolate(a, b, da/(da-db));
                 else if (db < 0) b = interpolate(a, b, da/(da-db));
             }
@@ -1054,16 +1133,24 @@ void xgl_triangle_list(Xgl_ctx context, Xgl_facet_list *facets,
     if (!(context->render_buffer & XGL_RENDER_DRAW_BUFFER)) return;
     surface_begin(&s, context->device);
     for (i = 0; i < points->num_pts; i += 3) {
-        for (j = 0; j < 3; ++j) polygon[j] = vertex_at(context, points, i+j);
+        if (points->pt_type == XGL_PT_F3H)
+            assert(context->surface_color_selector == XGL_SURF_COLOR_CONTEXT);
+        for (j = 0; j < 3; ++j)
+            polygon[j] = vertex_at(context, points, i+j,
+                context->surface_color_selector == XGL_SURF_COLOR_CONTEXT ? &context->surface_color : NULL);
         ++stats.triangles;
+        if (context->model_clip_count) ++stats.model_clip_primitives;
         count = 3;
-        for (plane = 0; plane < 6 && count; ++plane) {
-            if (!(context->clip_flags & (1 << plane))) continue;
+        for (plane = 0; plane < 6+context->model_clip_count && count; ++plane) {
+            if (!clip_enabled(context, plane)) continue;
             next_count = 0;
             a = polygon[count-1]; da = clip_distance(&a, context, plane);
             for (j = 0; j < count; ++j) {
                 b = polygon[j]; db = clip_distance(&b, context, plane);
-                if ((da < 0) != (db < 0)) clipped[next_count++] = interpolate(a, b, da/(da-db));
+                if ((da < 0) != (db < 0)) {
+                    clipped[next_count++] = interpolate(a, b, da/(da-db));
+                    if (plane < context->model_clip_count) ++stats.model_clip_intersections;
+                }
                 if (db >= 0) clipped[next_count++] = b;
                 assert(next_count <= 16);
                 a = b; da = db;

@@ -84,9 +84,9 @@ static GLboolean read_vertex(const GLcontext *ctx,
     memcpy(result->position, address, vb->ObjPtr->size * sizeof(GLfloat));
     for (component = 0; component < 4; ++component)
         if (!finite_value(result->position[component])) return GL_FALSE;
-    /* XGL's colored/normal 3D point records have no homogeneous w member.
-     * Keep arbitrary homogeneous source vertices on the full Mesa path. */
-    if (result->position[3] != 1.0f) return GL_FALSE;
+    /* Retain homogeneous coordinates verbatim. Native preflight may choose
+     * uncolored F3H records with a per-primitive flat context color; smooth,
+     * lit or textured nonunit-W cases continue through Mesa's TNL stages. */
     if (color) {
         if (!color->Ptr || color->Size < 3 || color->Size > 4 || color->StrideB < 0)
             return GL_FALSE;

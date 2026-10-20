@@ -13,3 +13,5 @@
 /examples/glx_textured_cube
 /tests/test_texture
 /tests/test_fragments
+/tests/test_clip
+/tests/test_lighting

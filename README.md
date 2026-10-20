@@ -19,7 +19,10 @@ Software-only builds require explicit `make software` or `make glx-software`;
 
 The GLX path submits eligible object-space geometry to XGL for model/view and
 perspective transforms, clipping, ambient/diffuse lighting, texture mapping,
-depth testing, and rasterization. It can draw to front and back window buffers.
+depth testing, and rasterization. This includes affine user clipping planes,
+compatible positional spotlights, flat unlit homogeneous vertices, and
+nonmipmapped 1D or eligible 2D textures.
+It can draw to front and back window buffers.
 When a draw needs software fragment effects, a hybrid path still rasterizes
 each primitive with XGL, then applies Mesa alpha, stencil/depth, fog, blending,
 logic, masks, and unsupported texture operations before committing pixels.
@@ -154,6 +157,8 @@ make test-accel
 make test-tnl
 make test-texture
 make test-fragments
+make test-clip
+make test-lighting
 ```
 
 This builds `lib/liboldengl.a` and `.so` with `<GL/osmesa.h>` for offscreen

@@ -78,12 +78,14 @@ static GLboolean texture_points(const GLcontext *ctx, const SWvertex *input[3],
         if (!finite_value(w) || !finite_value(original[i].x*w) ||
             !finite_value(original[i].y*w) ||
             !finite_value((double)input[i]->texcoord[0][0]/q) ||
-            !finite_value((double)input[i]->texcoord[0][1]/q)) return GL_FALSE;
+            (ctx->Texture._ReallyEnabled != TEXTURE0_1D &&
+             !finite_value((double)input[i]->texcoord[0][1]/q))) return GL_FALSE;
         point->x = (GLfloat)(original[i].x*w);
         point->y = (GLfloat)(original[i].y*w);
         point->z = (GLfloat)w; point->color = original[i].color;
         uv[0] = input[i]->texcoord[0][0]/q;
-        uv[1] = input[i]->texcoord[0][1]/q;
+        uv[1] = ctx->Texture._ReallyEnabled == TEXTURE0_1D ?
+            0.5f : input[i]->texcoord[0][1]/q;
         memcpy(packed+i*stride+offsetof(Xgl_pt_color_data_f3d, data), uv, sizeof(uv));
     }
     return GL_TRUE;
