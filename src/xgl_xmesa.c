@@ -213,7 +213,10 @@ clear(GLcontext *ctx, GLbitfield mask, GLboolean all,
        GLint x, GLint y, GLint width, GLint height)
 {
     struct accelerated_context *n = find(ctx);
-    if ((mask & DD_FRONT_LEFT_BIT) && all &&
+    if ((mask & DD_FRONT_LEFT_BIT) &&
+        (all || (ctx->DrawBuffer && x == 0 && y == 0 &&
+            width == (GLint)ctx->DrawBuffer->Width &&
+            height == (GLint)ctx->DrawBuffer->Height)) &&
         oldengl_xgl_accel_clear(begin_native(n), ctx))
         mask &= ~DD_FRONT_LEFT_BIT;
     if (mask)

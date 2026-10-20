@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <GL/osmesa.h>
 #include "context.h"
 #include "xgl_accel.h"
@@ -75,9 +76,11 @@ int main(void)
     glEnable(GL_STENCIL_TEST);
     check(!oldengl_xgl_accel_point(native, core, &a), "stencil testing falls back");
     glDisable(GL_STENCIL_TEST);
+    glScissor(1, 1, 2, 2);
     glEnable(GL_SCISSOR_TEST);
     check(!oldengl_xgl_accel_clear(native, core), "scissored clear falls back");
     glDisable(GL_SCISSOR_TEST);
+    glAlphaFunc(GL_GREATER, 0.5f);
     glEnable(GL_ALPHA_TEST);
     check(!oldengl_xgl_accel_triangle(native, core, &a, &b, &c), "alpha testing falls back");
     glDisable(GL_ALPHA_TEST);
@@ -111,6 +114,59 @@ int main(void)
     check(stats.triangles == 2 && stats.points == 1 && stats.lines == 1 &&
           stats.clears == 1 && stats.copies == 1 && stats.fallbacks >= 4,
           "native operation counters describe actual submitted work");
+    glEnable(GL_ALPHA_TEST);
+    glAlphaFunc(GL_ALWAYS, 0.5f);
+    check(oldengl_xgl_accel_eligible(core, GL_TRIANGLES),
+          "always-passing alpha test retains native geometry");
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ZERO);
+    check(oldengl_xgl_accel_eligible(core, GL_TRIANGLES),
+          "replacement blending retains native geometry");
+    core->Color.BlendEquation = GL_FUNC_REVERSE_SUBTRACT;
+    check(!oldengl_xgl_accel_eligible(core, GL_TRIANGLES),
+          "nontrivial blend equation still falls back");
+    core->Color.BlendEquation = GL_FUNC_ADD;
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_COLOR_LOGIC_OP);
+    glLogicOp(GL_COPY);
+    check(oldengl_xgl_accel_eligible(core, GL_TRIANGLES),
+          "copy logic operation overrides nontrivial blending natively");
+    glLogicOp(GL_XOR);
+    check(!oldengl_xgl_accel_eligible(core, GL_TRIANGLES),
+          "nontrivial color logic operation falls back");
+    glDisable(GL_COLOR_LOGIC_OP);
+    glDisable(GL_BLEND);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, 8, 8);
+    check(oldengl_xgl_accel_eligible(core, GL_TRIANGLES),
+          "full-buffer scissor retains native geometry");
+    check(oldengl_xgl_accel_clear(native, core),
+          "full-buffer scissor retains native clear");
+    glScissor(-1, -1, INT_MAX, INT_MAX);
+    check(oldengl_xgl_accel_fragment_eligible(core),
+          "oversized covering scissor is accepted without integer overflow");
+    glScissor(INT_MAX, INT_MAX, INT_MAX, INT_MAX);
+    check(!oldengl_xgl_accel_fragment_eligible(core),
+          "off-buffer scissor remains a required fallback");
+    glDisable(GL_SCISSOR_TEST);
+    glPixelZoom(1.0f, 1.0f);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glEnable(GL_POLYGON_SMOOTH);
+    glEnable(GL_POLYGON_STIPPLE);
+    glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
+    core->Texture._ReallyEnabled = TEXTURE0_2D;
+    check(oldengl_xgl_accel_copy_pixels(native, core, 0, 0, 2, 2, 4, 4),
+          "pixel copies ignore polygon, lighting and texture geometry state");
+    core->Texture._ReallyEnabled = 0;
+    glEnable(GL_FOG);
+    check(!oldengl_xgl_accel_copy_pixels(native, core, 0, 0, 2, 2, 4, 4),
+          "pixel-copy fog remains a required software effect");
+    glDisable(GL_FOG);
+    glDisable(GL_POLYGON_SMOOTH);
+    glDisable(GL_POLYGON_STIPPLE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SINGLE_COLOR);
     oldengl_xgl_accel_destroy(native);
     check(MockXGLLiveObjects() == 0 && MockXGLCloses() == 1,
           "native objects and shared session released");

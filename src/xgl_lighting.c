@@ -55,7 +55,7 @@ GLboolean oldengl_xgl_lighting_eligible(const GLcontext *ctx)
     if (!ctx->Light.Enabled)
         return GL_TRUE;
     if (ctx->Light.ShadeModel != GL_SMOOTH || ctx->Light.Model.TwoSide ||
-        ctx->Light.Model.LocalViewer || ctx->Light.ColorMaterialEnabled ||
+        ctx->Light.ColorMaterialEnabled ||
         ctx->Light.Model.ColorControl != GL_SINGLE_COLOR)
         return GL_FALSE;
     material = &ctx->Light.Material[0];

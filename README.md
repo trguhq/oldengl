@@ -11,6 +11,12 @@ surfaces, context copying, X fonts, and procedure lookup. It uses Xlib directly;
 it does not implement the indirect GLX wire protocol or install an X server
 extension. Explicit indirect-context requests return NULL.
 
+Plain `make` and `make install` build and install the XGL-backed `libGL`.
+Native dispatch is enabled by default, with software fallback when the current
+operation or drawable cannot use the supported XGL path, or XGL fails.
+Software-only builds require explicit `make software` or `make glx-software`;
+`make install-software` installs the offscreen software renderer.
+
 The GLX path submits eligible object-space geometry to XGL for model/view and
 perspective transforms, clipping, ambient/diffuse lighting, texture mapping,
 depth testing, and rasterization. It can draw to front and back window buffers.
@@ -40,7 +46,7 @@ OPENWIN_ROOT=/usr/openwin
 With Sun WorkShop C and `make`:
 
 ```sh
-make xgl CC=cc 'CFLAGS=-O -Xa -KPIC' 'SHARED_FLAGS=-G' \
+make CC=cc 'CFLAGS=-O -Xa -KPIC' 'SHARED_FLAGS=-G' \
   'XGL_LIBS=-L/opt/SUNWits/Graphics-sw/xgl/lib -R/opt/SUNWits/Graphics-sw/xgl/lib -L/usr/openwin/lib -R/usr/openwin/lib -lxgl -lX11 -ldga -ldl -lintl -lnsl -lsocket'
 ```
 
@@ -64,8 +70,8 @@ cc -Iinclude -I/usr/openwin/include application.c \
 
 For shared linking, supply runtime library paths with the compiler's
 `-R` option or the site's normal runtime loader configuration. To stage
-an installation, use `make install-xgl` with the same build variables
-and, for example, `PREFIX=/opt/oldengl DESTDIR=/tmp/stage`.
+an installation, use `make install` (`install-xgl` is an alias) with the same
+build variables and, for example, `PREFIX=/opt/oldengl DESTDIR=/tmp/stage`.
 
 ## Use GLX
 
@@ -74,8 +80,9 @@ context with `direct=True`, then use ordinary `glXMakeCurrent`, GL calls,
 and `glXSwapBuffers`. GLX double-buffered contexts have separate front and
 back buffers. Eligible `GL_FRONT` and `GL_BACK` window rendering uses XGL;
 back-buffer acceleration requires two allocated XGL window buffers. Color and
-depth transfers preserve mixed native/software results. `OLDENGL_NO_XGL=1`
-disables native dispatch for comparison.
+depth transfers preserve mixed native/software results. No opt-in variable is
+needed: unset or zero `OLDENGL_NO_XGL` keeps XGL enabled;
+`OLDENGL_NO_XGL=1` explicitly forces software rendering for comparison.
 
 [examples/glx_textured_cube.c](examples/glx_textured_cube.c) demonstrates a
 perspective-transformed, lit, textured, depth-tested rotating cube in a

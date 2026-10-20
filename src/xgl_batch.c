@@ -63,9 +63,7 @@ static GLboolean common_state(const GLcontext *c)
 {
     return c && c->Visual.rgbMode && !c->Visual.alphaBits &&
         c->Visual.redBits >= 8 && c->Visual.greenBits >= 8 && c->Visual.blueBits >= 8 &&
-        c->RenderMode == GL_RENDER && !c->Depth.OcclusionTest && !c->Stencil.Enabled &&
-        !c->Color.AlphaEnabled && !c->Color.BlendEnabled && !c->Color.ColorLogicOpEnabled &&
-        !c->Scissor.Enabled && !c->Fog.Enabled && !c->Fog.ColorSumEnabled &&
+        c->RenderMode == GL_RENDER && oldengl_xgl_accel_fragment_eligible(c) &&
         !c->Transform._AnyClip &&
         c->Color.ColorMask[0] && c->Color.ColorMask[1] && c->Color.ColorMask[2] &&
         ((c->Color.DriverDrawBuffer == GL_FRONT_LEFT && c->Color.DrawDestMask == FRONT_LEFT_BIT) ||

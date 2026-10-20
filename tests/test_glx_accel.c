@@ -3,10 +3,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <GL/gl.h>
 #include <GL/glx.h>
+
+/* putenv is available on Solaris 2.6; unsetenv is not required there. */
+extern int putenv(char *);
+extern char **environ;
 
 static int checks, failures, protocol_errors;
 
@@ -73,6 +78,103 @@ static void triangle_z(GLfloat z)
     glEnd();
 }
 
+static void remove_native_override(void)
+{
+    char **entry, **following;
+    for (entry = environ; *entry; ) {
+        if (strncmp(*entry, "OLDENGL_NO_XGL=", 15) == 0) {
+            for (following = entry; *following; ++following)
+                following[0] = following[1];
+        } else ++entry;
+    }
+}
+
+static void test_default_routing(void)
+{
+    static char enabled[] = "OLDENGL_NO_XGL=0";
+    static char disabled[] = "OLDENGL_NO_XGL=1";
+    struct MockNativeXGLStats before, after;
+    remove_native_override();
+    check(getenv("OLDENGL_NO_XGL") == NULL, "native default requires no environment opt-in");
+    MockNativeXGLGetStats(&before);
+    glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
+    glColor3f(1,0,0); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles && after.clears > before.clears,
+          "unset override dispatches eligible geometry and clear to XGL");
+    read_color(32,28,255,0,0,"native default preserves ordinary GL readback");
+
+    check(putenv(enabled) == 0, "set explicit native-enabled override");
+    before = after;
+    glColor3f(0,1,0); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles, "zero override keeps native dispatch enabled");
+    read_color(32,28,0,255,0,"explicit native-enabled draw reaches the window");
+
+    check(putenv(disabled) == 0, "set explicit software override");
+    before = after;
+    glClearColor(0.25f,0.5f,0.75f,1); glClear(GL_COLOR_BUFFER_BIT);
+    glColor3f(0,0,1); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles == before.triangles && after.clears == before.clears,
+          "software override bypasses eligible native geometry and clear");
+    read_color(32,28,0,0,255,"software override preserves ordinary GL rendering");
+    read_color(2,2,64,128,191,"software override also preserves color clear");
+
+    remove_native_override();
+    check(getenv("OLDENGL_NO_XGL") == NULL, "remove the software override");
+    before = after;
+    glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
+    glColor3f(1,1,0); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles && after.clears > before.clears,
+          "native dispatch resumes immediately when the override is removed");
+    read_color(32,28,255,255,0,"reenabled native draw replaces software output");
+}
+
+static void test_semantic_noops(void)
+{
+    struct MockNativeXGLStats before, after;
+    glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
+    glAlphaFunc(GL_ALWAYS,0.5f); glEnable(GL_ALPHA_TEST);
+    glLogicOp(GL_COPY); glEnable(GL_COLOR_LOGIC_OP);
+    glBlendFunc(GL_ONE,GL_ZERO); glEnable(GL_BLEND);
+    glScissor(-8,-8,80,80); glEnable(GL_SCISSOR_TEST);
+    MockNativeXGLGetStats(&before);
+    glClearColor(0.125f,0.25f,0.5f,1); glClear(GL_COLOR_BUFFER_BIT); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.clears > before.clears,
+          "a full-window scissor keeps whole color clears on XGL");
+    read_color(2,2,32,64,128,"native clear preserves color with a full-window scissor");
+    before = after;
+    glColor3f(0,1,1); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles,
+          "compatible no-op fragment states keep eligible geometry on XGL");
+    read_color(32,28,0,255,255,"combined no-op states preserve native fragment color");
+
+    before = after;
+    glScissor(0,0,16,64);
+    glColor3f(1,0,0); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles == before.triangles,
+          "a partial scissor still requires software fallback");
+    read_color(32,28,0,255,255,"software scissor preserves pixels outside its rectangle");
+    read_color(8,8,255,0,0,"software scissor writes pixels inside its rectangle");
+
+    glDisable(GL_SCISSOR_TEST); glScissor(0,0,64,64);
+    glDisable(GL_ALPHA_TEST); glAlphaFunc(GL_ALWAYS,0);
+    glDisable(GL_COLOR_LOGIC_OP);
+    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    before = after;
+    glColor4f(0,0,1,0.5f); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles == before.triangles,
+          "blending that changes destination color still uses software");
+    read_color(32,28,0,127,255,"software blending consumes the preceding native result");
+    glDisable(GL_BLEND); glBlendFunc(GL_ONE,GL_ZERO);
+}
+
 static void test_depth(void)
 {
     static const GLenum functions[8] = {GL_NEVER, GL_LESS, GL_EQUAL, GL_LEQUAL,
@@ -107,14 +209,14 @@ static void test_depth(void)
     read_color(32, 28, 0, 0, 255, "native disabled depth writes preserve earlier Z values");
     glDepthMask(GL_TRUE); glDepthFunc(GL_LESS); glClearDepth(1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ZERO);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor3f(1,0,0); triangle_z(0.0f); glFinish();
     glDisable(GL_BLEND); glDepthFunc(GL_EQUAL);
     glColor3f(0,1,0); triangle_z(0.0f); glFinish();
     read_color(32,28,0,255,0,"native GL_EQUAL consumes software depth without quantization changes");
     glDepthFunc(GL_LESS); glColor3f(0,0,1); triangle_z(0.0f); glFinish();
     read_color(32,28,0,255,0,"native GL_LESS rejects geometry at matching software depth");
-    glDepthFunc(GL_EQUAL); glEnable(GL_BLEND); glBlendFunc(GL_ONE,GL_ZERO);
+    glDepthFunc(GL_EQUAL); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     glColor3f(1,0,1); triangle_z(0.0f); glFinish();
     read_color(32,28,255,0,255,"software GL_EQUAL consumes native depth without quantization changes");
     glDisable(GL_BLEND);
@@ -161,6 +263,19 @@ static void test_lighting(void)
     MockNativeXGLGetStats(&after);
     check(after.lights > before.lights && after.triangles > before.triangles,
           "lit GL triangles configure and consume native XGL light objects");
+    /* Depth excludes the legacy raster-only callback, so this verifies
+     * that a local viewer does not reject the native lighting stage when
+     * no specular term can depend on the viewer position. */
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS);
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER,GL_TRUE);
+    MockNativeXGLGetStats(&before);
+    triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles && after.depth_tests > before.depth_tests,
+          "local viewer keeps compatible ambient/diffuse lighting on XGL");
+    read_color(32,28,255,0,0,"local viewer does not change native zero-specular lighting");
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER,GL_FALSE);
+    glDisable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
     glNormal3f(0,0,-1); triangle(); glFinish();
     read_color(32, 28, 0, 0, 0, "native diffuse lighting respects transformed vertex normals");
     glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, quarter_red);
@@ -193,7 +308,7 @@ static void test_lighting(void)
     /* Force a semantically identical Mesa reference through an unsupported
      * blend state. This compares native lighting against the actual CPU
      * renderer without depending on our fixture's equation for expectations. */
-    glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ZERO);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glClear(GL_COLOR_BUFFER_BIT); triangle(); glFinish();
     glReadPixels(32,28,1,1,GL_RGBA,GL_UNSIGNED_BYTE,software);
     check(abs((int)native[0]-software[0]) <= 2 &&
@@ -304,7 +419,7 @@ static void test_texture(void)
     check(after.texture_samples > before.texture_samples && native[0] == 0 &&
           native[1] == 255 && native[2] == 0,
           "native perspective texture interpolation selects a texel distinct from affine UVs");
-    glEnable(GL_BLEND); glBlendFunc(GL_ONE,GL_ZERO);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     textured_perspective_triangle();
     glReadPixels(32,35,1,1,GL_RGBA,GL_UNSIGNED_BYTE,software);
     equal = 1;
@@ -351,6 +466,8 @@ int main(void)
     check(glXMakeCurrent(display, windows[0], contexts[0]), "bind native context");
     glViewport(0, 0, 64, 64);
     glDrawBuffer(GL_FRONT); glReadBuffer(GL_FRONT);
+    test_default_routing();
+    test_semantic_noops();
     glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT); glFinish();
     MockNativeXGLGetStats(&before);
     check(before.clears > 0, "GL clear reached XGL through the XMesa driver hook");

@@ -19,15 +19,39 @@ color_target(const GLcontext *ctx)
         ctx->Color.ColorMask[2];
 }
 
+/* Enabled state that leaves RGB fragments unchanged must not force a
+ * software draw. The color-target checks in our callers exclude alpha
+ * buffers, so only RGB blend factors affect the native result. */
+static GLboolean
+scissor_covers_buffer(const GLcontext *ctx)
+{
+    if (!ctx->Scissor.Enabled)
+        return GL_TRUE;
+    return ctx->DrawBuffer && ctx->Scissor.X <= 0 && ctx->Scissor.Y <= 0 &&
+        (double)ctx->Scissor.X + (double)ctx->Scissor.Width >= ctx->DrawBuffer->Width &&
+        (double)ctx->Scissor.Y + (double)ctx->Scissor.Height >= ctx->DrawBuffer->Height;
+}
+
+GLboolean
+oldengl_xgl_accel_fragment_eligible(const GLcontext *ctx)
+{
+    if (!ctx || ctx->Depth.OcclusionTest || ctx->Stencil.Enabled ||
+        (ctx->Color.AlphaEnabled && ctx->Color.AlphaFunc != GL_ALWAYS) ||
+        !scissor_covers_buffer(ctx) || ctx->Fog.Enabled || ctx->Fog.ColorSumEnabled)
+        return GL_FALSE;
+    /* GL color logic operations replace blending when enabled. */
+    if (ctx->Color.ColorLogicOpEnabled)
+        return ctx->Color.LogicOp == GL_COPY;
+    return !ctx->Color.BlendEnabled ||
+        (ctx->Color.BlendEquation == GL_FUNC_ADD &&
+         ctx->Color.BlendSrcRGB == GL_ONE && ctx->Color.BlendDstRGB == GL_ZERO);
+}
+
 GLboolean
 oldengl_xgl_accel_eligible(const GLcontext *ctx, GLenum primitive)
 {
-    if (!color_target(ctx) || ctx->RenderMode != GL_RENDER ||
-        ctx->Depth.Test || ctx->Depth.OcclusionTest || ctx->Stencil.Enabled ||
-        ctx->Color.AlphaEnabled || ctx->Color.BlendEnabled ||
-        ctx->Color.ColorLogicOpEnabled || ctx->Scissor.Enabled ||
-        ctx->Fog.Enabled || ctx->Fog.ColorSumEnabled ||
-        ctx->Texture._ReallyEnabled ||
+    if (!color_target(ctx) || ctx->RenderMode != GL_RENDER || ctx->Depth.Test ||
+        !oldengl_xgl_accel_fragment_eligible(ctx) || ctx->Texture._ReallyEnabled ||
         ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)
         return GL_FALSE;
     if (primitive == GL_POINTS)
@@ -284,7 +308,7 @@ oldengl_xgl_accel_clear(OldenGLXGLAccel *a, GLcontext *ctx)
 {
     Xgl_color color;
     unsigned long serial;
-    if (!a || a->failed || !color_target(ctx) || ctx->Scissor.Enabled)
+    if (!a || a->failed || !color_target(ctx) || !scissor_covers_buffer(ctx))
         return GL_FALSE;
     if (!oldengl_xgl_batch_reset(a))
         return GL_FALSE;
@@ -309,7 +333,8 @@ oldengl_xgl_accel_copy_pixels(OldenGLXGLAccel *a, GLcontext *ctx,
     Xgl_bounds_i2d bounds;
     Xgl_pt_i2d position;
     unsigned long serial;
-    if (!a || a->failed || !oldengl_xgl_accel_eligible(ctx, GL_TRIANGLES) ||
+    if (!a || a->failed || !color_target(ctx) || ctx->RenderMode != GL_RENDER ||
+        ctx->Depth.Test || !oldengl_xgl_accel_fragment_eligible(ctx) ||
         ctx->Pixel.DriverReadBuffer != GL_FRONT_LEFT ||
         ctx->Pixel.ZoomX != 1.0f || ctx->Pixel.ZoomY != 1.0f ||
         ctx->_ImageTransferState || width < 1 || height < 1 ||

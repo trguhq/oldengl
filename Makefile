@@ -21,7 +21,7 @@ INCLUDES = -Iinclude -Ivendor/mesa/include -Ivendor/mesa/src -Ivendor/mesa/src/m
 XMESA_INCLUDES = -Ivendor/xmesa/src -Ivendor/xmesa/include -Isrc
 include mk/sources.mk
 # Establish the default before including native XMesa compilation rules.
-all: software
+all: xgl
 include mk/glx.mk
 MESA_OBJECTS = $(MESA_SOURCES:.c=.o)
 XMESA_OBJECTS = $(XMESA_SOURCES:.c=.o)
@@ -156,7 +156,7 @@ test-tnl: tests/test_tnl
 test-accel: tests/test_accel
 	./tests/test_accel
 
-install: software
+install-software: software
 	mkdir -p $(DESTDIR)$(PREFIX)/include/GL $(DESTDIR)$(PREFIX)/lib
 	mkdir -p $(DESTDIR)$(PREFIX)/share/doc/oldengl
 	cp $(PUBLIC_HEADERS) $(DESTDIR)$(PREFIX)/include/GL/
@@ -164,15 +164,17 @@ install: software
 	cp LICENSE README.md docs/XGL.md docs/GLX.md docs/ACCELERATION.md docs/VALIDATION.md $(DESTDIR)$(PREFIX)/share/doc/oldengl/
 	cp vendor/mesa/LICENSE.MIT vendor/mesa/LICENSE.SGI-B-1.1 vendor/mesa/README.vendor $(DESTDIR)$(PREFIX)/share/doc/oldengl/
 
-install-xgl: xgl install
+install: xgl install-software
 	cp include/GL/xglmesa.h $(DESTDIR)$(PREFIX)/include/GL/
 	cp include/GL/glx.h include/GL/glxext.h include/GL/glxtokens.h $(DESTDIR)$(PREFIX)/include/GL/
 	cp lib/libXGLMesa.a lib/libXGLMesa.so lib/libGL.a lib/libGL.so $(DESTDIR)$(PREFIX)/lib/
 	cp vendor/xmesa/README.vendor $(DESTDIR)$(PREFIX)/share/doc/oldengl/README.xmesa
 
+install-xgl: install
+
 clean:
 	rm -f $(MESA_OBJECTS) $(XMESA_OBJECTS) $(XMESA_ACCEL_OBJECTS) $(XGL_OBJECTS) lib/*.a lib/*.so tests/test_gl tests/test_xgl tests/test_glx tests/test_accel tests/test_tnl tests/test_texture tests/test_glx_accel tests/*_mock.o examples/triangle examples/glx_triangle examples/glx_textured_cube
 
-.PHONY: all software glx-software xgl example test test-glx test-accel test-tnl test-texture test-glx-accel install install-xgl clean
+.PHONY: all software glx-software xgl example test test-glx test-accel test-tnl test-texture test-glx-accel install install-xgl install-software clean
 
 $(XMESA_OBJECTS): $(XMESA_HEADERS) $(MESA_HEADERS)

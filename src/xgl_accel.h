@@ -24,6 +24,9 @@ OldenGLXGLAccel *oldengl_xgl_accel_create(Display *, Window, int screen,
                                          GLsizei width, GLsizei height);
 void oldengl_xgl_accel_destroy(OldenGLXGLAccel *);
 GLboolean oldengl_xgl_accel_resize(OldenGLXGLAccel *, GLsizei, GLsizei);
+/* Fragment effects only; native batch depth handling is checked separately.
+ * Callers must separately require an RGB target without stored alpha. */
+GLboolean oldengl_xgl_accel_fragment_eligible(const GLcontext *);
 GLboolean oldengl_xgl_accel_eligible(const GLcontext *, GLenum primitive);
 GLboolean oldengl_xgl_accel_point(OldenGLXGLAccel *, GLcontext *,
                                  const SWvertex *);

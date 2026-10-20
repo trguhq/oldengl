@@ -1,5 +1,11 @@
 # Native XGL geometry, lighting, textures and rasterization
 
+The default build and installation select the XGL-backed GLX library.
+Rendering tries its object-space XGL path first, then the native raster path
+for Mesa-processed vertices, before using software rasterization when needed.
+No environment-variable opt-in is required. `make software`,
+`make glx-software` and `make install-software` are explicit software choices.
+
 The GLX build installs an object-space stage before Mesa's transform and
 lighting stages. `src/xgl_tnl.c` imports immediate-mode and array attributes
 and decomposes all ten GL 1.1 primitive modes into points, independent lines
@@ -20,7 +26,15 @@ The native Sun SDK and target hardware have not been available for validation.
 Native dispatch requires a front-left or back-left X window buffer, an RGB
 TrueColor or DirectColor visual with at least eight bits per color channel,
 no alpha buffer, and full RGB writes. Unsupported batches continue through
-Mesa. `OLDENGL_NO_XGL=1` forces software rendering.
+Mesa. `OLDENGL_NO_XGL=1` explicitly forces software rendering; leaving it
+unset or setting it to zero keeps native dispatch enabled.
+
+State that leaves fragments unchanged does not force software: alpha testing
+with `GL_ALWAYS`, color logic with `GL_COPY`, additive blending with source
+`GL_ONE` and destination `GL_ZERO`, and a scissor covering the full drawable
+remain eligible. Color logic takes precedence over blending as GL requires.
+Pixel-copy eligibility ignores polygon, lighting and texture state that does
+not apply to `glCopyPixels`.
 
 | Stage or operation | Native coverage and conditions |
 | --- | --- |
@@ -32,13 +46,14 @@ Mesa. `OLDENGL_NO_XGL=1` forces software rendering.
 | Lighting | Compatible Gouraud ambient/diffuse material lighting, emission and global ambient; directional or positional lights with constant/linear attenuation |
 | Depth | All eight GL comparison functions and the depth write mask; 16- or 24-bit Mesa depth storage when the native Z range can represent it |
 | Texture mapping | Eligible unit-zero 2D surface textures with per-pixel perspective correction; details below |
-| Front color clear | Whole buffer, no scissor or partial RGB mask |
+| Front color clear | Whole buffer, scissor disabled or covering the drawable, full RGB mask |
 | Front color copy | Same draw/read drawable, identity zoom/transfer, in-bounds rectangle |
 | Back color rendering | A second XGL window buffer must be allocated; retained XMesa color is uploaded and downloaded around native batches |
 
 XGL's lighting equations differ from GL in some cases. Native lighting
 therefore rejects specular contributions, spotlights, quadratic attenuation,
-two-sided lighting, color material, local-viewer and separate-specular modes.
+two-sided lighting, color material and separate-specular modes. Local-viewer
+state does not block the supported zero-specular lighting cases.
 Spatially varying positional ambient attenuation also uses software.
 The model/view matrix must be affine, and transformed normals must have unit
 length. With `GL_NORMALIZE`, input normals are conditioned to satisfy XGL's
@@ -83,7 +98,7 @@ The native subset supports:
 Textures on points or lines, multiple texture units, 1D/3D/cube textures,
 sphere-map texgen, compressed images, anisotropy, texture comparison and
 unsupported LOD constraints use Mesa. Alpha-buffer visuals and alpha tests
-or framebuffer blending also use software, even when the texture itself is
+or framebuffer blending that change fragment results use software, even when the texture itself is
 otherwise eligible.
 
 ## Shared color and depth results
@@ -107,8 +122,8 @@ presents the updated XMesa image. This does not promise native page flipping
 or vertical synchronization. Transfers and synchronization prioritize correct
 mixed rendering; no performance improvement has been measured.
 
-Stencil, occlusion, alpha tests, framebuffer blending, logic operations, fog,
-scissor, user clip planes, partial RGB masks, alpha-buffer visuals, pixmaps,
+Stencil, occlusion, effective alpha tests/blending/logic operations, fog,
+partial scissor, user clip planes, partial RGB masks, alpha-buffer visuals, pixmaps,
 pbuffers, selection and feedback use software. Native context creation or
 device errors disable the affected native path and retain software fallback.
 `src/xgl_session.c` shares the process-wide XGL System State.

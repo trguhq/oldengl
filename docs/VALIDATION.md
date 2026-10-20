@@ -11,7 +11,7 @@ The following results distinguish software behavior from native XGL execution.
 | `make software CFLAGS='-O2 -fPIC -std=c89'` | Static and shared portable renderer libraries; no system GL dependency |
 | `./tests/test_gl` | 93 assertions in 13 behavior groups, using real offscreen rendering |
 | `./tests/test_xgl` | 141 assertions using the real renderer and test-only XGL/Xlib fixtures |
-| `make test-accel` | 29 checks of native raster dispatch and software fallback using a synthetic SDK |
+| `make test-accel` | 40 checks of native raster dispatch and software fallback using a synthetic SDK |
 | `make test-tnl` | 97 checks of object-space primitive expansion, raw attribute import and pre-transform stage dispatch |
 | `make test-texture` | 40 strict-C89 checks of native texture eligibility, image upload, sampling state and coordinate conversion |
 | `make test-glx` with Xvfb | 91 assertions using real Xlib windows and the software GLX binding |
@@ -110,8 +110,10 @@ model/view and projection transforms, homogeneous clipping, compatible
 ambient/diffuse lighting, perspective texture sampling, Z comparison and
 copies, and multiple window buffers so mixed-rendering results can be checked. This is distinct from
 merely calling native adapter helpers in isolation. The expanded suite passes
-88 checks, including texture sampling, mipmaps, updates, perspective correction,
-and software/native depth-equality transitions.
+112 checks, including texture sampling, mipmaps, updates, perspective correction,
+and software/native depth-equality transitions. Default/zero/disabled native
+routing, identity fragment operations, necessary software fallback and
+zero-specular local-viewer lighting are also covered.
 
 The native GLX library compiles against test SDK declarations on the host.
 Those declarations deliberately use synthetic constants and cannot establish
@@ -125,3 +127,17 @@ checks and application-specific accelerated scenes. Compare native results
 with `OLDENGL_NO_XGL=1`, then inspect actual XGL driver/device behavior.
 See [ACCELERATION.md](ACCELERATION.md) for exact native eligibility and
 remaining software features.
+
+## Default build and installation
+
+Plain `make` selects the native XGL-backed libraries. On the host this was
+verified with the synthetic SDK, followed by staged `make install` checks
+that compare the installed `libGL` and `libXGLMesa` archives/shared libraries
+and GLX headers with their build outputs. Explicit `make install-software`
+stages only the portable renderer. The default build does not silently
+substitute a software-only library when the XGL SDK is missing.
+
+The native GLX routing suite passes 112 checks normally and with ASan/UBSan
+and leak detection; the Mesa archive itself is not instrumented. The separate
+native adapter suite passes 40 checks. These remain host fixture validations,
+with the target-machine SDK and hardware checks described above outstanding.

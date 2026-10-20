@@ -27,8 +27,10 @@ swap groups, stereo buffers, or vertical synchronization. The current build
 is single-threaded. Keep the display open until contexts and drawables are
 released. Native XGL failure leaves the software rendering path available.
 
-Build `make xgl` on Solaris with the XGL SDK to obtain `libGL.a`/`.so` with
-native dispatch, or `make glx-software` with an X11 SDK for `libGLsoft`.
+Build with plain `make` (or `make xgl`) on Solaris with the XGL SDK to obtain
+`libGL.a`/`.so` with native dispatch enabled by default. `make install` installs that build.
+Use explicit `make glx-software` with an X11 SDK for `libGLsoft`.
+Use `make install-software` for the separate offscreen renderer installation.
 Do not link a second GL implementation into the application.
 
 Native XGL window rendering accepts object-space vertices before Mesa's
