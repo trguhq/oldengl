@@ -28,7 +28,8 @@ is single-threaded. Keep the display open until contexts and drawables are
 released. Native XGL failure leaves the software rendering path available.
 
 Build with plain `make` (or `make xgl`) on Solaris with the XGL SDK to obtain
-`libGL.a`/`.so` with native dispatch enabled by default. `make install` installs that build.
+`libGL.a`/`.so` with native dispatch enabled by default. `make install` installs
+that build.
 Use explicit `make glx-software` with an X11 SDK for `libGLsoft`.
 Use `make install-software` for the separate offscreen renderer installation.
 Do not link a second GL implementation into the application.
@@ -36,16 +37,24 @@ Do not link a second GL implementation into the application.
 Native XGL window rendering accepts object-space vertices before Mesa's
 transform and lighting stages. Eligible geometry uses XGL transformations,
 clipping, ambient/diffuse lighting, depth testing and per-pixel texture
-mapping. Ordinary OpenGL texture objects, uploads, subimages, sharing and
-texture coordinates work through this GLX binding; unsupported texture modes
-use Mesa. See [ACCELERATION.md](ACCELERATION.md) for the precise native subset.
+mapping. When a fragment effect cannot use that direct path, the hybrid path
+rasterizes Mesa-processed vertices with XGL into a hidden buffer, then sends
+covered spans through Mesa fragment processing. Alpha tests, stencil/depth,
+fog, real blending, logic operations, masks and polygon stipple can therefore
+retain native rasterization. Ordinary OpenGL texture objects, uploads,
+subimages, sharing and texture coordinates work through this GLX binding;
+unsupported texture modes are sampled by Mesa on the captured fragments. See [ACCELERATION.md](ACCELERATION.md) for the precise native subset.
 
 For `GL_BACK`, the native path requests a second XGL window buffer and
 transfers retained XMesa color and depth data around each native batch.
 `glXSwapBuffers` presents the retained back image through XMesa. This preserves
 software fallback and readback; it does not provide synchronized native buffer
-flipping. Pixmaps, pbuffers, alpha-buffer visuals and unsupported state remain
-software rendered. `OLDENGL_NO_XGL=1` provides a software comparison path.
+flipping. Hybrid capture also uses a hidden second XGL buffer and readable
+native Z, including for front draws and alpha-buffer visuals. It commits one
+primitive at a time, preserving overlapping fragments, depth/stencil effects,
+and front/back or no-color draw destinations. Pixmaps, pbuffers and unsupported
+rasterization remain software rendered. `OLDENGL_NO_XGL=1` provides an explicit
+software comparison path.
 
 `examples/glx_textured_cube.c` combines perspective, lighting, texturing,
 depth testing and double buffering. Run with `--frames N` to exit after a
@@ -59,5 +68,6 @@ audits the 39 core declarations and exports separately from behavior.
 
 `tests/test_glx_accel.c` separately exercises the actual native XMesa hooks
 against real Xlib windows and a synthetic XGL implementation. It verifies
-native dispatch and exchanges with software rendering, but cannot establish
+native dispatch, ordered hybrid fragment effects and exchanges with software
+rendering, but cannot establish
 Sun SDK ABI compatibility or execution on a graphics processor.

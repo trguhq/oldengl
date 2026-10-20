@@ -1,0 +1,3 @@
+# Exact upstream patches retain the whitespace on their context lines.
+vendor/mesa/LOCAL-PATCHES.diff -whitespace
+vendor/xmesa/LOCAL-PATCHES.diff -whitespace

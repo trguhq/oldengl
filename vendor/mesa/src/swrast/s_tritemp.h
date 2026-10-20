@@ -218,7 +218,9 @@
    }
 
 #ifndef DO_OCCLUSION_TEST
-   ctx->OcclusionResult = GL_TRUE;
+   /* Occlusion queries must wait for the fragment tests in span writers. */
+   if (!ctx->Depth.OcclusionTest)
+      ctx->OcclusionResult = GL_TRUE;
 #endif
 
    /* Edge setup.  For a triangle strip these could be reused... */

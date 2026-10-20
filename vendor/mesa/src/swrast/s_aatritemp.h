@@ -153,7 +153,9 @@
    }
 
 #ifndef DO_OCCLUSION_TEST
-   ctx->OcclusionResult = GL_TRUE;
+   /* Occlusion queries must wait for the fragment tests in span writers. */
+   if (!ctx->Depth.OcclusionTest)
+      ctx->OcclusionResult = GL_TRUE;
 #endif
 
    /* Plane equation setup:

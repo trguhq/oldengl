@@ -26,4 +26,6 @@ struct oldengl_xgl_accel {
 void oldengl_xgl_batch_cleanup(OldenGLXGLAccel *);
 void oldengl_xgl_batch_resize(OldenGLXGLAccel *);
 GLboolean oldengl_xgl_batch_reset(OldenGLXGLAccel *);
+GLboolean oldengl_xgl_batch_memory(OldenGLXGLAccel *);
+GLboolean oldengl_xgl_batch_target(OldenGLXGLAccel *, GLboolean back);
 #endif

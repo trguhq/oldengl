@@ -191,6 +191,8 @@ int main(void)
         "eye linear generation uses modelview position");
     model[12]=0; ctx->Texture.Unit[0].GenModeS=GL_SPHERE_MAP;
     check(!oldengl_xgl_texture_eligible(ctx), "sphere generation falls back");
+    check(oldengl_xgl_texture_rgb_eligible(ctx),
+        "post-TNL sphere coordinates retain native RGB sampling");
     ctx->Texture.Unit[0].TexGenEnabled=0;
     matrix[15]=2;
     check(oldengl_xgl_texture_coordinates(ctx,input,position,stq) && stq[2]==2,
@@ -250,6 +252,8 @@ int main(void)
     check(!oldengl_xgl_texture_eligible(ctx), "explicit texture border falls back");
     image.Border=0; ctx->Visual.alphaBits=8;
     check(!oldengl_xgl_texture_eligible(ctx), "alpha framebuffer falls back");
+    check(oldengl_xgl_texture_rgb_eligible(ctx),
+        "captured RGB retains native sampling with software framebuffer alpha");
     ctx->Visual.alphaBits=0; ctx->Texture._ReallyEnabled|=TEXTURE1_2D;
     check(!oldengl_xgl_texture_eligible(ctx), "multiple texture units fall back");
     ctx->Texture._ReallyEnabled=TEXTURE0_2D;

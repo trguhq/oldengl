@@ -42,6 +42,37 @@
 
 
 
+/* Restore destination reads used by blending and logic operations. A draw
+ * selection may name several buffers or GL_NONE, while SetReadBuffer must
+ * always receive one concrete buffer. Multi-draw span writers select each
+ * actual destination explicitly; GL_NONE has no color destination. */
+static void
+restore_draw_read_buffer( GLcontext *ctx )
+{
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
+   GLenum mode = ctx->Color.DriverDrawBuffer;
+   switch (mode) {
+   case GL_FRONT_LEFT:
+   case GL_FRONT_RIGHT:
+   case GL_BACK_LEFT:
+   case GL_BACK_RIGHT:
+      break;
+   default:
+      if (ctx->Color.DrawDestMask & FRONT_LEFT_BIT)
+         mode = GL_FRONT_LEFT;
+      else if (ctx->Color.DrawDestMask & FRONT_RIGHT_BIT)
+         mode = GL_FRONT_RIGHT;
+      else if (ctx->Color.DrawDestMask & BACK_LEFT_BIT)
+         mode = GL_BACK_LEFT;
+      else if (ctx->Color.DrawDestMask & BACK_RIGHT_BIT)
+         mode = GL_BACK_RIGHT;
+      else
+         mode = GL_FRONT_LEFT;
+   }
+   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, mode);
+}
+
+
 /*
  * Read a block of color index pixels.
  */
@@ -81,8 +112,7 @@ read_index_pixels( GLcontext *ctx,
                             &ctx->Pack, ctx->_ImageTransferState);
    }
 
-   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer,
-                                ctx->Color.DriverDrawBuffer);
+   restore_draw_read_buffer(ctx);
 }
 
 
@@ -330,8 +360,7 @@ read_rgba_pixels( GLcontext *ctx,
    if (read_fast_rgba_pixels( ctx, x, y, width, height,
                               format, type, pixels, packing )) {
 
-      (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
-      return; /* done! */
+      goto read_done; /* done! */
    }
 
    readWidth = (width > MAX_WIDTH) ? MAX_WIDTH : width;
@@ -361,13 +390,13 @@ read_rgba_pixels( GLcontext *ctx,
          break;
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glReadPixels(type)" );
-         return;
+         goto read_done;
    }
 
    if (!_mesa_is_legal_format_and_type(format, type) ||
        format == GL_INTENSITY) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "glReadPixels(format or type)");
-      return;
+      goto read_done;
    }
 
    if (ctx->Pixel.Convolution2DEnabled || ctx->Pixel.Separable2DEnabled) {
@@ -378,13 +407,13 @@ read_rgba_pixels( GLcontext *ctx,
       tmpImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
       if (!tmpImage) {
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
-         return;
+         goto read_done;
       }
       convImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
       if (!convImage) {
          FREE(tmpImage);
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
-         return;
+         goto read_done;
       }
 
       /* read full RGBA, FLOAT image */
@@ -458,7 +487,7 @@ read_rgba_pixels( GLcontext *ctx,
              * buffers, for example.
              */
             DEFMARRAY(GLfloat, rgbaf, MAX_WIDTH, 4);  /* mac 32k limitation */
-            CHECKARRAY(rgbaf, return);  /* mac 32k limitation */
+            CHECKARRAY(rgbaf, goto read_done);  /* mac 32k limitation */
             _mesa_chan_to_float_span(ctx, readWidth,
                                      (CONST GLchan (*)[4]) rgba, rgbaf);
             _mesa_pack_float_rgba_span(ctx, readWidth,
@@ -476,7 +505,8 @@ read_rgba_pixels( GLcontext *ctx,
       }
    }
 
-   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
+read_done:
+   restore_draw_read_buffer(ctx);
 }
 
 

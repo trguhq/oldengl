@@ -86,3 +86,15 @@ Further GLX integration corrections:
   GLX CopyContext and correct the header include guard.
 * src/main/context.c: copy enabled capabilities when GL_ENABLE_BIT is
   selected and copy the complete lighting state instead of one light.
+
+Hybrid fragment integration corrections:
+* src/swrast/s_stencil.c: stencil/depth spans report whether any fragment
+  survives both tests, and preserve stencil-fail/depth-fail hardware writes.
+  This keeps occlusion results correct without losing stencil side effects.
+* src/swrast/s_readpix.c: restore destination reads with a concrete buffer
+  after readback, including GL_NONE and multiple draw destinations; restore
+  on error paths as well. Hybrid blend/logic reads then use the draw surface.
+* src/swrast/s_tritemp.h and s_aatritemp.h: while HP occlusion testing is
+  enabled, leave visibility to the span fragment tests instead of marking
+  triangles visible before alpha/stencil/depth rejection. The occlusion
+  raster-state bit excludes optimized paths that bypass span processing.

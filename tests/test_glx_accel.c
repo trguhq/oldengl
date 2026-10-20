@@ -89,6 +89,15 @@ static void remove_native_override(void)
     }
 }
 
+static void force_software(int enabled)
+{
+    static char disabled[] = "OLDENGL_NO_XGL=1";
+    glFinish();
+    if (enabled) {
+        if (putenv(disabled) != 0) abort();
+    } else remove_native_override();
+}
+
 static void test_default_routing(void)
 {
     static char enabled[] = "OLDENGL_NO_XGL=0";
@@ -157,8 +166,8 @@ static void test_semantic_noops(void)
     glScissor(0,0,16,64);
     glColor3f(1,0,0); triangle(); glFinish();
     MockNativeXGLGetStats(&after);
-    check(after.triangles == before.triangles,
-          "a partial scissor still requires software fallback");
+    check(after.triangles > before.triangles,
+          "XGL rasterization feeds software partial-scissor processing");
     read_color(32,28,0,255,255,"software scissor preserves pixels outside its rectangle");
     read_color(8,8,255,0,0,"software scissor writes pixels inside its rectangle");
 
@@ -169,8 +178,8 @@ static void test_semantic_noops(void)
     before = after;
     glColor4f(0,0,1,0.5f); triangle(); glFinish();
     MockNativeXGLGetStats(&after);
-    check(after.triangles == before.triangles,
-          "blending that changes destination color still uses software");
+    check(after.triangles > before.triangles,
+          "XGL rasterization feeds software framebuffer blending");
     read_color(32,28,0,127,255,"software blending consumes the preceding native result");
     glDisable(GL_BLEND); glBlendFunc(GL_ONE,GL_ZERO);
 }
@@ -210,14 +219,18 @@ static void test_depth(void)
     glDepthMask(GL_TRUE); glDepthFunc(GL_LESS); glClearDepth(1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    force_software(1);
     glColor3f(1,0,0); triangle_z(0.0f); glFinish();
+    force_software(0);
     glDisable(GL_BLEND); glDepthFunc(GL_EQUAL);
     glColor3f(0,1,0); triangle_z(0.0f); glFinish();
     read_color(32,28,0,255,0,"native GL_EQUAL consumes software depth without quantization changes");
     glDepthFunc(GL_LESS); glColor3f(0,0,1); triangle_z(0.0f); glFinish();
     read_color(32,28,0,255,0,"native GL_LESS rejects geometry at matching software depth");
     glDepthFunc(GL_EQUAL); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    force_software(1);
     glColor3f(1,0,1); triangle_z(0.0f); glFinish();
+    force_software(0);
     read_color(32,28,255,0,255,"software GL_EQUAL consumes native depth without quantization changes");
     glDisable(GL_BLEND);
     MockNativeXGLGetStats(&after);
@@ -305,12 +318,13 @@ static void test_lighting(void)
     glReadPixels(32,28,1,1,GL_RGBA,GL_UNSIGNED_BYTE,native);
     check(native[1] > 100 && native[1] < 130 && native[0] == 0 && native[2] == 0,
           "native positional lighting applies constant attenuation");
-    /* Force a semantically identical Mesa reference through an unsupported
-     * blend state. This compares native lighting against the actual CPU
-     * renderer without depending on our fixture's equation for expectations. */
+    /* Explicitly bypass XGL for an independent Mesa reference. Blend state
+     * now uses native coverage plus software fragment processing. */
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    force_software(1);
     glClear(GL_COLOR_BUFFER_BIT); triangle(); glFinish();
     glReadPixels(32,28,1,1,GL_RGBA,GL_UNSIGNED_BYTE,software);
+    force_software(0);
     check(abs((int)native[0]-software[0]) <= 2 &&
           abs((int)native[1]-software[1]) <= 2 &&
           abs((int)native[2]-software[2]) <= 2,
@@ -420,8 +434,10 @@ static void test_texture(void)
           native[1] == 255 && native[2] == 0,
           "native perspective texture interpolation selects a texel distinct from affine UVs");
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    force_software(1);
     textured_perspective_triangle();
     glReadPixels(32,35,1,1,GL_RGBA,GL_UNSIGNED_BYTE,software);
+    force_software(0);
     equal = 1;
     for (i = 0; i < 3; ++i) if (abs((int)native[i]-software[i]) > 2) equal = 0;
     check(equal,"native perspective texture interpolation agrees with software reference");
@@ -430,18 +446,541 @@ static void test_texture(void)
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
     MockNativeXGLGetStats(&before); textured_quad(0.25f,0.25f,0.25f,0.25f);
     MockNativeXGLGetStats(&after);
-    check(after.texture_samples == before.texture_samples,"unsupported GL_CLAMP semantics retain software texture fallback");
+    check(after.texture_samples == before.texture_samples && after.triangles > before.triangles,
+          "unsupported GL_CLAMP sampling keeps native rasterization and software texturing");
     read_color(32,28,255,0,0,"software texture fallback preserves expected texel color");
     glDisable(GL_TEXTURE_2D); glDeleteTextures(1,&texture);
+}
+
+/* Every scene has an independent Mesa reference. Samples are well inside
+ * primitives so this suite checks fragment semantics, not XGL edge rules. */
+struct hybrid_snapshot {
+    GLubyte color[5][4], stencil;
+    GLfloat depth;
+};
+
+static void hybrid_snapshot(struct hybrid_snapshot *snapshot)
+{
+    static const GLint positions[5][2] = {{32,28},{31,28},{8,8},{48,12},{32,35}};
+    int i;
+    for (i = 0; i < 5; ++i)
+        glReadPixels(positions[i][0],positions[i][1],1,1,GL_RGBA,
+                     GL_UNSIGNED_BYTE,snapshot->color[i]);
+    glReadPixels(32,28,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,&snapshot->depth);
+    glReadPixels(32,28,1,1,GL_STENCIL_INDEX,GL_UNSIGNED_BYTE,&snapshot->stencil);
+}
+
+static void varying_depth_triangle(void)
+{
+    glBegin(GL_TRIANGLES);
+    glVertex3f(-0.8f,-0.8f,-0.5f);
+    glVertex3f(0.8f,-0.8f,0.5f);
+    glVertex3f(0.0f,0.8f,0.0f);
+    glEnd();
+}
+
+static void hybrid_scene(int scene)
+{
+    GLubyte stipple[128];
+    GLubyte texels[16] = {255,0,0,255, 0,255,0,0,
+                         0,0,255,255, 255,255,255,255};
+    GLfloat fog_color[4] = {0,0,1,1};
+    GLuint texture = 0;
+    int i, was_forced;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_TEXTURE); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glDisable(GL_LIGHTING); glDisable(GL_FOG); glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND); glDisable(GL_ALPHA_TEST); glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST); glDisable(GL_COLOR_LOGIC_OP);
+    glDisable(GL_TEXTURE_1D); glDisable(GL_TEXTURE_2D);
+    glDisable(GL_POLYGON_STIPPLE); glDisable(GL_CULL_FACE);
+    glDisable(GL_POLYGON_SMOOTH); glDisable(GL_POINT_SMOOTH);
+    glDisable(GL_LINE_SMOOTH); glDisable(GL_LINE_STIPPLE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glShadeModel(GL_SMOOTH); glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glDepthMask(GL_TRUE); glStencilMask(255);
+    glClearColor(0,0,0,1); glClearDepth(1); glClearStencil(0);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
+    switch (scene) {
+    case 0:
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        /* Both primitives share one cassette. Compositing only a final
+         * scratch image would lose the first triangle's contribution. */
+        glBegin(GL_TRIANGLES);
+        glColor4f(1,0,0,0.5f);
+        glVertex3f(-0.8f,-0.8f,0); glVertex3f(0.8f,-0.8f,0); glVertex3f(0,0.8f,0);
+        glColor4f(0,0,1,0.5f);
+        glVertex3f(-0.8f,-0.8f,0); glVertex3f(0.8f,-0.8f,0); glVertex3f(0,0.8f,0);
+        glEnd();
+        break;
+    case 1:
+        glClearColor(1,1,1,1); glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(0,0,0,1); triangle();
+        break;
+    case 2:
+        glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER,0.5f);
+        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+        glEnable(GL_STENCIL_TEST); glStencilFunc(GL_ALWAYS,0,255);
+        glStencilOp(GL_KEEP,GL_KEEP,GL_INCR);
+        glColor4f(1,0,0,0.25f); triangle_z(-0.5f);
+        glColor4f(0,1,0,1); triangle_z(0.0f);
+        break;
+    case 3:
+        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+        glEnable(GL_STENCIL_TEST); glStencilFunc(GL_NEVER,7,255);
+        glStencilOp(GL_REPLACE,GL_KEEP,GL_KEEP);
+        glColor3f(1,0,0); triangle_z(-0.5f);
+        glStencilFunc(GL_EQUAL,7,255); glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);
+        glColor3f(0,1,0); triangle_z(0.0f);
+        break;
+    case 4:
+        glEnable(GL_FOG); glFogi(GL_FOG_MODE,GL_LINEAR);
+        glFogf(GL_FOG_START,0); glFogf(GL_FOG_END,1);
+        glFogfv(GL_FOG_COLOR,fog_color);
+        glColor3f(1,0,0); triangle_z(-0.5f);
+        break;
+    case 5:
+        glClearColor(0.25f,0.5f,0.75f,1); glClear(GL_COLOR_BUFFER_BIT);
+        glColorMask(GL_FALSE,GL_TRUE,GL_FALSE,GL_FALSE);
+        glColor3f(1,1,1); triangle();
+        break;
+    case 6:
+        glClearColor(0.25f,0.5f,0.75f,1); glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_COLOR_LOGIC_OP); glLogicOp(GL_XOR);
+        glColor3f(1,1,1); triangle();
+        break;
+    case 7:
+        for (i = 0; i < 128; ++i) stipple[i] = 0xaa;
+        glPolygonStipple(stipple); glEnable(GL_POLYGON_STIPPLE);
+        glColor3f(1,1,1); triangle();
+        break;
+    case 8:
+        glGenTextures(1,&texture); glBindTexture(GL_TEXTURE_2D,texture);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,2,2,0,GL_RGBA,GL_UNSIGNED_BYTE,texels);
+        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_REPLACE);
+        glEnable(GL_TEXTURE_2D); glEnable(GL_ALPHA_TEST);
+        glAlphaFunc(GL_GREATER,0.5f); glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glTexCoord2f(0.75f,0.25f); glColor3f(1,1,1); triangle_z(-0.5f);
+        glTexCoord2f(0.25f,0.25f); triangle_z(0.0f);
+        break;
+    case 9:
+        glClearColor(0,0,0,0.25f); glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_BLEND); glBlendFunc(GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA);
+        glColor4f(1,0,0,1); triangle();
+        break;
+    case 10:
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_CULL_FACE); glCullFace(GL_BACK); glFrontFace(GL_CCW);
+        glColor4f(0,1,0,1); triangle();
+        glCullFace(GL_FRONT); glColor4f(1,0,0,1); triangle_z(-0.5f);
+        break;
+    case 11:
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+        glColor3f(1,0,0); triangle_z(0.0f);
+        glPolygonOffset(0,-100); glEnable(GL_POLYGON_OFFSET_FILL);
+        glColor3f(0,1,0); triangle_z(0.0f);
+        break;
+    case 12: case 13: case 14:
+        if (scene == 12) texels[3] = 128;
+        else if (scene == 13) { texels[7] = 128; texels[11] = 0; }
+        else for (i = 3; i < 16; i += 4) texels[i] = 255;
+        glGenTextures(1,&texture); glBindTexture(GL_TEXTURE_2D,texture);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_REPEAT);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,2,2,0,GL_RGBA,GL_UNSIGNED_BYTE,texels);
+        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,
+                    scene == 12 ? GL_MODULATE : GL_REPLACE);
+        glEnable(GL_TEXTURE_2D);
+        if (scene == 12) {
+            glClearColor(0,0,1,1); glClear(GL_COLOR_BUFFER_BIT);
+            glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+            glColor4f(0.5f,1,1,0.5f); glTexCoord2f(0.25f,0.25f); triangle();
+        } else if (scene == 13) {
+            glMatrixMode(GL_PROJECTION); glLoadIdentity(); glFrustum(-1,1,-1,1,1,10);
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER,0.25f);
+            glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); glColor4f(1,1,1,1);
+            textured_perspective_triangle();
+        } else {
+            glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+            glColor4f(1,1,1,0.5f);
+            glBegin(GL_TRIANGLES);
+            glTexCoord4f(0,0,0,1); glVertex3f(-0.8f,-0.8f,0);
+            glTexCoord4f(1,0,0,2); glVertex3f(0.8f,-0.8f,0);
+            glTexCoord4f(0.5f,1,0,1.5f); glVertex3f(0,0.8f,0);
+            glEnd();
+        }
+        break;
+    case 15:
+        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+        was_forced = getenv("OLDENGL_NO_XGL") != NULL;
+        force_software(1); glColor3f(1,0,0); varying_depth_triangle(); glFinish();
+        force_software(was_forced);
+        glDepthFunc(GL_EQUAL); glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glColor3f(0,1,0); varying_depth_triangle();
+        break;
+    default: abort();
+    }
+    glFinish();
+    if (texture) glDeleteTextures(1,&texture);
+    glMatrixMode(GL_TEXTURE); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glPopAttrib();
+}
+
+static void test_hybrid_effects(void)
+{
+    struct hybrid_snapshot native, software;
+    struct MockNativeXGLStats before, after;
+    static const char *names[16] = {
+        "ordered transparent primitives", "black fragment coverage",
+        "alpha before stencil/depth", "stencil before depth",
+        "fragment fog", "channel masks", "color logic",
+        "polygon stipple", "software texture alpha before depth",
+        "destination alpha blending", "hybrid face culling", "hybrid polygon offset",
+        "native RGB texture with software blending", "native perspective RGB with software alpha",
+        "varying projective q with software texturing",
+        "varying software depth followed by hybrid GL_EQUAL"
+    };
+    int scene, i, component, equal;
+    for (scene = 0; scene < 16; ++scene) {
+        force_software(0); MockNativeXGLGetStats(&before);
+        hybrid_scene(scene); hybrid_snapshot(&native);
+        MockNativeXGLGetStats(&after);
+        check(after.triangles > before.triangles,names[scene]);
+        if (scene == 12 || scene == 13)
+            check(after.texture_samples > before.texture_samples,
+                  "compatible RGB texture sampling remains native during software fragment operations");
+        if (scene == 14)
+            check(after.texture_samples == before.texture_samples,
+                  "varying projective texture q uses software sampling with native coverage");
+        force_software(1); hybrid_scene(scene); hybrid_snapshot(&software);
+        force_software(0);
+        equal = 1;
+        for (i = 0; i < 5; ++i) for (component = 0; component < 4; ++component)
+            if (abs((int)native.color[i][component]-software.color[i][component]) > 2)
+                equal = 0;
+        check(equal,"hybrid fragment colors agree with independent Mesa rendering");
+        if (!equal) fprintf(stderr,"  hybrid scene: %s; center native=(%u,%u,%u,%u), Mesa=(%u,%u,%u,%u)\n",
+            names[scene],native.color[0][0],native.color[0][1],native.color[0][2],native.color[0][3],
+            software.color[0][0],software.color[0][1],software.color[0][2],software.color[0][3]);
+        check(fabs(native.depth-software.depth) < 0.00001,
+              "hybrid depth agrees with independent Mesa rendering");
+        if (fabs(native.depth-software.depth) >= 0.00001)
+            fprintf(stderr,"  hybrid scene: %s; depth native=%.9g Mesa=%.9g\n",
+                    names[scene],native.depth,software.depth);
+        check(native.stencil == software.stencil,
+              "hybrid stencil agrees with independent Mesa rendering");
+        if (scene == 0)
+            check(abs((int)native.color[0][0]-64) <= 2 &&
+                  abs((int)native.color[0][2]-128) <= 2,
+                  "overlapping translucent primitives compose in submission order");
+        if (scene == 1)
+            check(native.color[0][0] == 0 && native.color[0][1] == 0 && native.color[0][2] == 0,
+                  "black covered fragments remain distinguishable from uncovered scratch pixels");
+        if (scene == 2)
+            check(native.color[0][1] == 255 && native.stencil == 1 && fabs(native.depth-0.5f) < 0.00001,
+                  "rejected alpha fragments do not update stencil or depth");
+        if (scene == 3)
+            check(native.color[0][1] == 255 && native.stencil == 7 && fabs(native.depth-0.5f) < 0.00001,
+                  "stencil rejection leaves depth available to later geometry");
+        if (scene == 15)
+            check(native.color[0][0] == 0 && native.color[0][1] == 255,
+                  "hybrid GL_EQUAL matches exact Mesa varying-depth interpolation");
+        if (scene == 12)
+            check(abs((int)native.color[0][0]-32) <= 2 &&
+                  abs((int)native.color[0][2]-191) <= 2,
+                  "software texture alpha blends native RGB without applying RGB modulation twice");
+        if (scene == 13)
+            check(native.color[4][0] == 0 && native.color[4][1] == 255 && native.color[4][2] == 0,
+                  "hybrid texture sampling preserves perspective-correct native RGB");
+        if (scene == 10 || scene == 11)
+            check(native.color[0][1] == 255 && native.color[0][0] == 0,
+                  "hybrid raster dispatch preserves culling and polygon-offset setup");
+        if (scene == 8)
+            check(native.color[0][0] == 255 && fabs(native.depth-0.5f) < 0.00001,
+                  "software texture alpha is tested before committing depth");
+    }
+}
+
+static void test_hybrid_points_lines(void)
+{
+    struct MockNativeXGLStats before, after;
+    GLubyte native[4], software[4];
+    int mode, i, equal, pass;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_LIGHTING); glDisable(GL_TEXTURE_2D); glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST); glDisable(GL_ALPHA_TEST); glDisable(GL_FOG);
+    glDisable(GL_COLOR_LOGIC_OP); glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_POINT_SMOOTH); glDisable(GL_LINE_SMOOTH); glDisable(GL_LINE_STIPPLE);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glPointSize(1); glLineWidth(1);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    for (mode = 0; mode < 2; ++mode) {
+        for (pass = 0; pass < 2; ++pass) {
+            force_software(pass);
+            glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
+            MockNativeXGLGetStats(&before);
+            glColor4f(1,0,0,0.5f);
+            glBegin(mode == 0 ? GL_POINTS : GL_LINES);
+            if (mode == 0) glVertex2f(0.0078125f,0.0078125f);
+            else {
+                glVertex2f(-0.75f,0.0078125f);
+                glVertex2f(0.75f,0.0078125f);
+            }
+            glEnd(); glFinish();
+            if (!pass) {
+                glReadPixels(32,32,1,1,GL_RGBA,GL_UNSIGNED_BYTE,native);
+                MockNativeXGLGetStats(&after);
+                check(mode == 0 ? after.points > before.points : after.lines > before.lines,
+                      "blended unit points and lines retain XGL rasterization");
+            } else glReadPixels(32,32,1,1,GL_RGBA,GL_UNSIGNED_BYTE,software);
+        }
+        equal = 1;
+        for (i = 0; i < 4; ++i)
+            if (abs((int)native[i]-software[i]) > 2) equal = 0;
+        check(equal && native[0] > 100 && native[1] == 0 && native[2] == 0,
+              "hybrid point/line alpha blending agrees with Mesa");
+    }
+    force_software(0); glPopAttrib();
+}
+
+static void test_hybrid_alpha_visual(Display *display)
+{
+    int attributes[] = {GLX_RGBA,GLX_RED_SIZE,8,GLX_GREEN_SIZE,8,GLX_BLUE_SIZE,8,
+                        GLX_ALPHA_SIZE,8,GLX_DEPTH_SIZE,24,GLX_STENCIL_SIZE,8,None};
+    XVisualInfo *visual;
+    Window window;
+    Colormap colormap;
+    GLXContext context;
+    GLint alpha_bits;
+    struct MockNativeXGLStats before, after;
+    struct hybrid_snapshot native, software;
+    int i, equal, scene;
+    visual = glXChooseVisual(display,DefaultScreen(display),attributes);
+    check(visual != NULL,"choose RGB visual with retained software alpha");
+    if (!visual) return;
+    window = create_window(display,visual,&colormap,250);
+    context = glXCreateContext(display,visual,NULL,True);
+    check(context != NULL && glXMakeCurrent(display,window,context),
+          "bind alpha-buffer GLX context for hybrid rendering");
+    if (context) {
+        glViewport(0,0,64,64); glDrawBuffer(GL_FRONT); glReadBuffer(GL_FRONT);
+        glGetIntegerv(GL_ALPHA_BITS,&alpha_bits);
+        check(alpha_bits >= 8,"hybrid test retains an actual alpha buffer");
+        force_software(0); MockNativeXGLGetStats(&before);
+        hybrid_scene(9); hybrid_snapshot(&native);
+        MockNativeXGLGetStats(&after);
+        check(after.triangles > before.triangles,
+              "alpha-buffer visuals use XGL coverage with software alpha storage");
+        force_software(1); hybrid_scene(9); hybrid_snapshot(&software); force_software(0);
+        equal = 1;
+        for (i = 0; i < 4; ++i)
+            if (abs((int)native.color[0][i]-software.color[0][i]) > 2) equal = 0;
+        check(equal && abs((int)native.color[0][0]-64) <= 2 &&
+              abs((int)native.color[0][3]-112) <= 2,
+              "destination alpha affects hybrid color and alpha exactly as Mesa");
+        for (scene = 12; scene <= 13; ++scene) {
+            MockNativeXGLGetStats(&before); hybrid_scene(scene); hybrid_snapshot(&native);
+            MockNativeXGLGetStats(&after);
+            check(after.texture_samples > before.texture_samples,
+                  "alpha-buffer hybrid rendering retains native RGB texture sampling");
+            force_software(1); hybrid_scene(scene); hybrid_snapshot(&software); force_software(0);
+            equal = 1;
+            for (i = 0; i < 4; ++i)
+                if (abs((int)native.color[0][i]-software.color[0][i]) > 2) equal = 0;
+            check(equal,"native RGB and software texture alpha agree with Mesa in alpha visuals");
+        }
+        check(glGetError() == GL_NO_ERROR,"hybrid alpha visual has no GL errors");
+        glXMakeCurrent(display,None,NULL); glXDestroyContext(display,context);
+    }
+    XDestroyWindow(display,window); XFreeColormap(display,colormap); XFree(visual);
+}
+
+static void test_hybrid_destinations(void)
+{
+    GLubyte color[2][2][4], after_none[2][4], stencil[2], zfail_stencil[2];
+    GLfloat depth[2];
+    GLboolean visible[2][2];
+    struct MockNativeXGLStats before, after;
+    int pass, buffer, component, equal, occlusion;
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_LIGHTING); glDisable(GL_FOG); glDisable(GL_TEXTURE_2D);
+    glDisable(GL_ALPHA_TEST); glDisable(GL_COLOR_LOGIC_OP);
+    glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST); glDisable(GL_DEPTH_TEST);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE); glDepthMask(GL_TRUE); glStencilMask(255);
+    occlusion = strstr((const char *)glGetString(GL_EXTENSIONS),"GL_HP_occlusion_test") != NULL;
+    check(occlusion,"occlusion extension is available for hybrid query checks");
+    for (pass = 0; pass < 2; ++pass) {
+        force_software(pass); glDrawBuffer(GL_FRONT_AND_BACK); glReadBuffer(GL_FRONT);
+        glDisable(GL_DEPTH_TEST); glDisable(GL_STENCIL_TEST); glDisable(GL_BLEND);
+        glClearColor(0,0,1,1); glClearDepth(1); glClearStencil(0);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        MockNativeXGLGetStats(&before);
+        glColor4f(1,0,0,0.5f); triangle(); glFinish();
+        MockNativeXGLGetStats(&after);
+        if (!pass) check(after.triangles > before.triangles,
+                         "front-and-back blending keeps native rasterization");
+        for (buffer = 0; buffer < 2; ++buffer) {
+            glReadBuffer(buffer == 0 ? GL_FRONT : GL_BACK);
+            glReadPixels(32,28,1,1,GL_RGBA,GL_UNSIGNED_BYTE,color[pass][buffer]);
+        }
+        glDrawBuffer(GL_NONE); glReadBuffer(GL_FRONT);
+        glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+        glEnable(GL_STENCIL_TEST); glStencilFunc(GL_ALWAYS,5,255);
+        glStencilOp(GL_KEEP,GL_KEEP,GL_REPLACE);
+        MockNativeXGLGetStats(&before);
+        glColor3f(0,1,0); triangle_z(-0.5f); glFinish();
+        MockNativeXGLGetStats(&after);
+        if (!pass) check(after.triangles > before.triangles,
+                         "GL_NONE depth/stencil work keeps native rasterization");
+        glReadPixels(32,28,1,1,GL_RGBA,GL_UNSIGNED_BYTE,after_none[pass]);
+        glReadPixels(32,28,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,&depth[pass]);
+        glReadPixels(32,28,1,1,GL_STENCIL_INDEX,GL_UNSIGNED_BYTE,&stencil[pass]);
+        visible[pass][0] = visible[pass][1] = GL_FALSE;
+        zfail_stencil[pass] = 0;
+        if (occlusion) {
+            glStencilOp(GL_KEEP,GL_INCR,GL_KEEP);
+            glEnable(GL_OCCLUSION_TEST_HP);
+            glGetBooleanv(GL_OCCLUSION_TEST_RESULT_HP,&visible[pass][0]);
+            glDepthFunc(GL_GREATER); triangle_z(-0.75f); glFinish();
+            glGetBooleanv(GL_OCCLUSION_TEST_RESULT_HP,&visible[pass][0]);
+            glReadPixels(32,28,1,1,GL_STENCIL_INDEX,GL_UNSIGNED_BYTE,&zfail_stencil[pass]);
+            glDepthFunc(GL_LESS); triangle_z(-0.75f); glFinish();
+            glGetBooleanv(GL_OCCLUSION_TEST_RESULT_HP,&visible[pass][1]);
+            glDisable(GL_OCCLUSION_TEST_HP);
+        }
+    }
+    force_software(0);
+    equal = 1;
+    for (buffer = 0; buffer < 2; ++buffer) for (component = 0; component < 4; ++component)
+        if (abs((int)color[0][buffer][component]-color[1][buffer][component]) > 2) equal = 0;
+    check(equal && abs((int)color[0][0][0]-128) <= 2 &&
+          abs((int)color[0][1][2]-127) <= 2,
+          "hybrid blending updates both GL color buffers like Mesa");
+    equal = 1;
+    for (component = 0; component < 4; ++component)
+        if (after_none[0][component] != color[0][0][component] ||
+            after_none[1][component] != color[1][0][component]) equal = 0;
+    check(equal,"GL_NONE leaves color untouched while processing fragments");
+    check(fabs(depth[0]-depth[1]) < 0.00001 && fabs(depth[0]-0.25f) < 0.00001 &&
+          stencil[0] == 5 && stencil[1] == 5,
+          "GL_NONE hybrid rendering writes authoritative depth and stencil");
+    if (occlusion) {
+        check(zfail_stencil[0] == 6 && zfail_stencil[1] == 6,
+              "depth-rejected hybrid spans preserve stencil Z-fail updates without reporting occlusion");
+        check(!visible[0][0] && visible[0][1] &&
+              visible[0][0] == visible[1][0] && visible[0][1] == visible[1][1],
+              "hybrid occlusion queries distinguish depth-rejected and passing fragments");
+        if (visible[0][0] || !visible[0][1] ||
+            visible[0][0] != visible[1][0] || visible[0][1] != visible[1][1])
+            fprintf(stderr,"  occlusion native=(%d,%d), Mesa=(%d,%d)\n",
+                    visible[0][0],visible[0][1],visible[1][0],visible[1][1]);
+    }
+    glPopAttrib();
+}
+
+static void test_hybrid_capture_failure(Display *display)
+{
+    int attributes[] = {GLX_RGBA,GLX_RED_SIZE,8,GLX_GREEN_SIZE,8,GLX_BLUE_SIZE,8,
+                        GLX_ALPHA_SIZE,8,GLX_DEPTH_SIZE,24,GLX_STENCIL_SIZE,8,None};
+    XVisualInfo *visual;
+    Window window;
+    Colormap colormap;
+    GLXContext context;
+    struct hybrid_snapshot replay, software;
+    struct MockNativeXGLStats before, after;
+    int i, equal;
+    visual = glXChooseVisual(display,DefaultScreen(display),attributes);
+    check(visual != NULL,"choose temporary visual for capture failure replay");
+    if (!visual) return;
+    window = create_window(display,visual,&colormap,330);
+    context = glXCreateContext(display,visual,NULL,True);
+    check(context != NULL && glXMakeCurrent(display,window,context),
+          "bind capture-failure context");
+    if (context) {
+        glViewport(0,0,64,64); glDrawBuffer(GL_FRONT); glReadBuffer(GL_FRONT);
+        force_software(0); MockNativeXGLGetStats(&before);
+        MockNativeXGLFailAfterColorReadback();
+        hybrid_scene(2); hybrid_snapshot(&replay);
+        MockNativeXGLGetStats(&after);
+        check(after.injected_errors == before.injected_errors+1 && after.triangles > before.triangles,
+              "fixture interrupts capture after native RGB but before coverage completion");
+        force_software(1); hybrid_scene(2); hybrid_snapshot(&software); force_software(0);
+        equal = 1;
+        for (i = 0; i < 4; ++i)
+            if (abs((int)replay.color[0][i]-software.color[0][i]) > 2) equal = 0;
+        check(equal && fabs(replay.depth-software.depth) < 0.00001 &&
+              replay.stencil == software.stencil,
+              "failed capture replays against unmodified software color/depth/stencil");
+        check(replay.color[0][1] == 255 && replay.stencil == 1 &&
+              fabs(replay.depth-0.5f) < 0.00001,
+              "failure replay retains alpha-before-stencil/depth ordering");
+        check(glGetError() == GL_NO_ERROR,"native capture failure does not invent a GL error");
+        glXMakeCurrent(display,None,NULL); glXDestroyContext(display,context);
+    }
+    XDestroyWindow(display,window); XFreeColormap(display,colormap); XFree(visual);
+}
+
+static void test_hybrid_split_buffers(Display *display, XVisualInfo *visual,
+                                      Window draw, GLXContext context)
+{
+    Window read;
+    Colormap colormap;
+    struct MockNativeXGLStats before, after;
+    read = create_window(display,visual,&colormap,410);
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_LIGHTING); glDisable(GL_FOG); glDisable(GL_TEXTURE_2D);
+    glDisable(GL_ALPHA_TEST); glDisable(GL_DEPTH_TEST); glDisable(GL_STENCIL_TEST);
+    glDisable(GL_COLOR_LOGIC_OP); glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND); glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glDrawBuffer(GL_BACK); glClearColor(0,0,1,1); glClear(GL_COLOR_BUFFER_BIT);
+    check(glXMakeCurrent(display,read,context),"initialize separate double-buffer read drawable");
+    glDrawBuffer(GL_FRONT); glClearColor(0,1,1,1); glClear(GL_COLOR_BUFFER_BIT);
+    glDrawBuffer(GL_BACK); glClearColor(1,1,0,1); glClear(GL_COLOR_BUFFER_BIT);
+    check(glXMakeContextCurrent(display,draw,read,context),
+          "bind separate draw and read buffers for hybrid blending");
+    glDrawBuffer(GL_BACK); glReadBuffer(GL_BACK);
+    read_color(32,28,255,255,0,"split read uses the read drawable's own back buffer");
+    glReadBuffer(GL_FRONT);
+    read_color(32,28,0,255,255,"split read uses the read drawable's front buffer");
+    MockNativeXGLGetStats(&before);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(1,0,0,0.5f); triangle(); glFinish();
+    MockNativeXGLGetStats(&after);
+    check(after.triangles > before.triangles,"split draw/read blending keeps native rasterization");
+    read_color(32,28,0,255,255,"hybrid blend preserves the separate read drawable");
+    check(glXMakeCurrent(display,draw,context),"restore combined draw/read after hybrid blend");
+    glReadBuffer(GL_BACK);
+    read_color(32,28,128,0,127,"split hybrid blend reads its draw back buffer as destination");
+    glPopAttrib();
+    XDestroyWindow(display,read); XFreeColormap(display,colormap);
 }
 
 int main(void)
 {
     int attributes[] = {GLX_RGBA, GLX_RED_SIZE, 8, GLX_GREEN_SIZE, 8,
-                        GLX_BLUE_SIZE, 8, GLX_DEPTH_SIZE, 24, None};
+                        GLX_BLUE_SIZE, 8, GLX_DEPTH_SIZE, 24, GLX_STENCIL_SIZE, 8, None};
     int back_attributes[] = {GLX_RGBA, GLX_DOUBLEBUFFER, GLX_RED_SIZE, 8,
                              GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8,
-                             GLX_DEPTH_SIZE, 24, None};
+                             GLX_DEPTH_SIZE, 24, GLX_STENCIL_SIZE, 8, None};
     Display *display;
     XVisualInfo *visual, *back_visual;
     Colormap maps[3];
@@ -480,7 +1019,7 @@ int main(void)
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(0, 0, 1, 0.5f); triangle(); glFinish();
     MockNativeXGLGetStats(&after);
-    check(after.triangles == before.triangles, "blended triangle uses software fallback");
+    check(after.triangles > before.triangles, "blended triangle retains native XGL rasterization");
     read_color(32, 28, 127, 0, 128, "software blend consumes the native window pixels");
     glDisable(GL_BLEND); glColor3f(0, 1, 0); triangle(); glFinish();
     MockNativeXGLGetStats(&after);
@@ -527,6 +1066,8 @@ int main(void)
     test_depth();
     test_lighting();
     test_texture();
+    test_hybrid_effects();
+    test_hybrid_points_lines();
 
     glColor3f(0, 1, 1); triangle();
     before = after;
@@ -567,10 +1108,22 @@ int main(void)
             glDisable(GL_BLEND); glColor3f(0, 1, 0); triangle(); glFinish();
             read_color(32, 28, 0, 255, 0, "native back-buffer rendering resumes after software fallback");
             test_depth();
+            test_hybrid_effects();
+            glReadBuffer(GL_FRONT);
+            read_color(32,28,255,0,0,"hybrid back rendering never displays scratch capture pixels");
+            glReadBuffer(GL_BACK);
+            glXSwapBuffers(display,windows[2]); glReadBuffer(GL_FRONT);
+            read_color(32,28,0,255,0,"swap presents the completed hybrid back image");
+            glReadBuffer(GL_BACK);
+            test_hybrid_points_lines();
+            test_hybrid_destinations();
+            test_hybrid_split_buffers(display,back_visual,windows[2],contexts[2]);
         }
         XFree(back_visual);
     }
     check(glGetError() == GL_NO_ERROR, "no unexpected GL errors");
+    test_hybrid_alpha_visual(display);
+    test_hybrid_capture_failure(display);
     glXMakeCurrent(display, None, NULL);
     for (i = 0; i < 3; ++i) {
         if (contexts[i]) glXDestroyContext(display, contexts[i]);

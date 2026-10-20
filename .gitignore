@@ -12,3 +12,4 @@
 /tests/test_tnl
 /examples/glx_textured_cube
 /tests/test_texture
+/tests/test_fragments

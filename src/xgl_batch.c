@@ -194,7 +194,7 @@ static GLboolean transforms(OldenGLXGLAccel *a)
         oldengl_xgl_error_serial() == serial;
 }
 
-static GLboolean memory_buffer(OldenGLXGLAccel *a)
+GLboolean oldengl_xgl_batch_memory(OldenGLXGLAccel *a)
 {
     Xgl_object calibration;
     Xgl_color color;
@@ -239,7 +239,7 @@ static GLboolean memory_buffer(OldenGLXGLAccel *a)
     return a->memory_context && oldengl_xgl_error_serial() == serial;
 }
 
-static GLboolean target_buffer(OldenGLXGLAccel *a, GLboolean back)
+GLboolean oldengl_xgl_batch_target(OldenGLXGLAccel *a, GLboolean back)
 {
     unsigned long serial = oldengl_xgl_error_serial();
     if (back && !a->back_checked) {
@@ -325,9 +325,10 @@ static GLboolean depth_download(OldenGLXGLAccel *a, GLcontext *c)
     return GL_TRUE;
 }
 
-/* XGL does not specify integer Z rounding. Measure the actual raster path
- * without writing color. The authoritative Mesa Z image is uploaded after
- * these probes, so they cannot change application-visible depth contents.
+/* XGL does not specify integer Z rounding. Probe the actual raster path
+ * in a nondisplayed window buffer. XGL_RENDER_Z_BUFFER is restricted to
+ * raster operators: geometry primitives require XGL_RENDER_DRAW_BUFFER.
+ * Mesa's authoritative Z image is uploaded after these scratch probes.
  */
 static GLboolean depth_mapping(OldenGLXGLAccel *a, const GLcontext *c,
                                const struct oldengl_xgl_batch *batch,
@@ -338,9 +339,11 @@ static GLboolean depth_mapping(OldenGLXGLAccel *a, const GLcontext *c,
     static const Xgl_usgn32 nearest[6] = {0,1,1,1,2,2};
     Xgl_pt_color_f3d vertex[3];
     Xgl_pt_list list;
+    Xgl_usgn32 saved_draw = 0;
     GLuint command, sample, i;
     unsigned long serial = oldengl_xgl_error_serial();
     int kind, is_truncated, is_nearest, first = 1;
+    GLboolean scratch_active = GL_FALSE, success = GL_FALSE;
     double selected;
     *bias = 0;
     if (!c->Depth.Test) return GL_TRUE;
@@ -349,11 +352,29 @@ static GLboolean depth_mapping(OldenGLXGLAccel *a, const GLcontext *c,
         XGL_3D_CTX_Z_BUFFER_WRITE_MASK, (Xgl_usgn32)0xffffffffUL,
         XGL_CTX_RENDER_BUFFER, XGL_RENDER_Z_BUFFER, 0);
     xgl_object_get(a->memory, XGL_MEM_RAS_Z_BUFFER_ADDR, &a->memory_z);
-    if (!a->memory_z) return GL_FALSE;
+    if (!a->memory_z || oldengl_xgl_error_serial() != serial) goto done;
     for (command = 0; command < batch->command_count; ++command) {
         GLenum mode = batch->commands[command].mode;
         kind = mode == GL_POINTS ? 0 : mode == GL_LINES ? 1 : 2;
         if (!a->depth_rounding[kind]) {
+            if (!scratch_active) {
+                if (!a->back_checked) {
+                    Xgl_usgn32 allocated = 0;
+                    xgl_object_set(a->raster, XGL_WIN_RAS_BUFFERS_REQUESTED,
+                        (Xgl_usgn32)2, 0);
+                    xgl_object_get(a->raster, XGL_WIN_RAS_BUFFERS_ALLOCATED, &allocated);
+                    a->back_checked = GL_TRUE;
+                    a->back_available = allocated >= 2 &&
+                        oldengl_xgl_error_serial() == serial;
+                }
+                if (!a->back_available) goto done;
+                xgl_object_get(a->raster, XGL_WIN_RAS_BUF_DRAW, &saved_draw);
+                if (oldengl_xgl_error_serial() != serial) goto done;
+                scratch_active = GL_TRUE;
+                xgl_object_set(a->raster, XGL_WIN_RAS_BUF_DISPLAY, (Xgl_usgn32)0,
+                    XGL_WIN_RAS_BUF_DRAW, (Xgl_usgn32)1, 0);
+                if (oldengl_xgl_error_serial() != serial) goto done;
+            }
             memset(vertex, 0, sizeof(vertex));
             memset(&list, 0, sizeof(list));
             list.pt_type = XGL_PT_COLOR_F3D;
@@ -368,7 +389,7 @@ static GLboolean depth_mapping(OldenGLXGLAccel *a, const GLcontext *c,
             xgl_object_set(a->context, XGL_3D_CTX_HLHSR_MODE, XGL_HLHSR_Z_BUFFER,
                 XGL_3D_CTX_Z_BUFFER_COMP_METHOD, XGL_Z_COMP_ALWAYS,
                 XGL_3D_CTX_Z_BUFFER_WRITE_MASK, (Xgl_usgn32)0xffffffffUL,
-                XGL_CTX_RENDER_BUFFER, XGL_RENDER_Z_BUFFER, 0);
+                XGL_CTX_RENDER_BUFFER, XGL_RENDER_DRAW_BUFFER, 0);
             is_truncated = is_nearest = 1;
             for (sample = 0; sample < 6; ++sample) {
                 for (i = 0; i < list.num_pts; ++i) vertex[i].z = samples[sample];
@@ -379,21 +400,25 @@ static GLboolean depth_mapping(OldenGLXGLAccel *a, const GLcontext *c,
                 xgl_object_set(a->raster, XGL_RAS_SOURCE_BUFFER, XGL_BUFFER_SEL_Z, 0);
                 xgl_context_copy_buffer(a->memory_context, NULL, NULL, a->raster);
                 xgl_context_flush(a->memory_context, XGL_FLUSH_SYNCHRONIZE);
-                if (oldengl_xgl_error_serial() != serial) return GL_FALSE;
+                if (oldengl_xgl_error_serial() != serial) goto done;
                 if (a->memory_z[0] != truncated[sample]) is_truncated = 0;
                 if (a->memory_z[0] != nearest[sample]) is_nearest = 0;
             }
             a->depth_rounding[kind] = is_truncated ? 1 : is_nearest ? 2 : -1;
         }
-        if (a->depth_rounding[kind] < 0) return GL_FALSE;
+        if (a->depth_rounding[kind] < 0) goto done;
         /* Mesa rounds points and 16-bit lines/triangles, but truncates
          * 24-bit line/triangle Z. Align native conversion at that boundary. */
         selected = (kind == 0 || c->Visual.depthBits <= 16 ? 0.5 : 0.0) -
             (a->depth_rounding[kind] == 2 ? 0.5 : 0.0);
-        if (!first && *bias != selected) return GL_FALSE;
+        if (!first && *bias != selected) goto done;
         *bias = selected; first = 0;
     }
-    return oldengl_xgl_error_serial() == serial;
+    success = GL_TRUE;
+done:
+    if (scratch_active)
+        xgl_object_set(a->raster, XGL_WIN_RAS_BUF_DRAW, saved_draw, 0);
+    return success && oldengl_xgl_error_serial() == serial;
 }
 
 static GLboolean configure_view(OldenGLXGLAccel *a, const GLcontext *c, double depth_bias)
@@ -449,7 +474,7 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
         c->DrawBuffer->Width != (GLuint)a->width || c->DrawBuffer->Height != (GLuint)a->height ||
         (c->Visual.depthBits != 16 && c->Visual.depthBits != 24) ||
         a->maximum_z < c->DepthMaxF || a->maximum_z > 16777215.0)) return GL_FALSE;
-    if ((back || c->Depth.Test) && !memory_buffer(a)) return GL_FALSE;
+    if ((back || c->Depth.Test) && !oldengl_xgl_batch_memory(a)) return GL_FALSE;
     stride = textured ? (lighting ? sizeof(Xgl_pt_color_normal_data_f3d) :
         sizeof(Xgl_pt_color_data_f3d)) + sizeof(float) :
         lighting ? sizeof(Xgl_pt_color_normal_f3d) : sizeof(Xgl_pt_color_f3d);
@@ -491,7 +516,7 @@ GLboolean oldengl_xgl_accel_draw_batch(OldenGLXGLAccel *a, GLcontext *c,
     }
     serial = oldengl_xgl_error_serial();
     XSync(a->display, False);
-    if (!oldengl_xgl_batch_reset(a) || !target_buffer(a, back) ||
+    if (!oldengl_xgl_batch_reset(a) || !oldengl_xgl_batch_target(a, back) ||
         !depth_mapping(a, c, b, &depth_bias)) goto done;
     if (back) {
         if (!xglmesa_pack_rgba(a->memory_rgb, back_rgba, a->width, a->height,

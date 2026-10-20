@@ -173,9 +173,9 @@ xmesa_set_read_buffer( GLcontext *ctx, GLframebuffer *buffer, GLenum mode )
       target->buffer = target->frontbuffer;
       xmesa_update_span_funcs(ctx);
    }
-   else if (mode==GL_BACK_LEFT && xmesa->xm_read_buffer->db_state) {
+   else if (mode==GL_BACK_LEFT && target->db_state) {
       if (target->backpixmap) {
-         target->buffer = (XMesaDrawable)xmesa->xm_buffer->backpixmap;
+         target->buffer = (XMesaDrawable)target->backpixmap;
       }
       else if (target->backimage) {
          target->buffer = None;

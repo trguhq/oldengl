@@ -88,7 +88,7 @@ static GLboolean linear_generator(GLenum mode, const GLfloat plane[4])
     return GL_TRUE;
 }
 
-GLboolean oldengl_xgl_texture_eligible(const GLcontext *ctx)
+static GLboolean texture_eligible(const GLcontext *ctx, GLboolean captured_rgb)
 {
     const struct gl_texture_unit *unit;
     const struct gl_texture_object *object;
@@ -98,9 +98,9 @@ GLboolean oldengl_xgl_texture_eligible(const GLcontext *ctx)
     GLuint i, levels, width, height;
     if (!ctx) return GL_FALSE;
     if (!ctx->Texture._ReallyEnabled) return GL_TRUE;
-    /* This native path does not preserve framebuffer alpha, test alpha,
-     * or blend alpha. Its caller separately rejects fragment operations. */
-    if (!ctx->Visual.rgbMode || ctx->Visual.alphaBits || CHAN_BITS != 8 ||
+    /* Direct rendering cannot retain framebuffer alpha. RGB capture may
+     * instead reconstruct that channel in the software fragment stage. */
+    if (!ctx->Visual.rgbMode || (!captured_rgb && ctx->Visual.alphaBits) || CHAN_BITS != 8 ||
         ctx->Texture._ReallyEnabled != TEXTURE0_2D) return GL_FALSE;
     unit = ctx->Texture.Unit;
     object = unit->_Current;
@@ -128,20 +128,24 @@ GLboolean oldengl_xgl_texture_eligible(const GLcontext *ctx)
     for (i = 0; i < 4; ++i)
         if (!finite_number(unit->EnvColor[i]) || unit->EnvColor[i] < 0.0f ||
             unit->EnvColor[i] > 1.0f) return GL_FALSE;
-    if ((unit->TexGenEnabled & S_BIT) &&
-        !linear_generator(unit->GenModeS, unit->GenModeS == GL_EYE_LINEAR ?
-                          unit->EyePlaneS : unit->ObjectPlaneS)) return GL_FALSE;
-    if ((unit->TexGenEnabled & T_BIT) &&
-        !linear_generator(unit->GenModeT, unit->GenModeT == GL_EYE_LINEAR ?
-                          unit->EyePlaneT : unit->ObjectPlaneT)) return GL_FALSE;
-    if ((unit->TexGenEnabled & R_BIT) &&
-        !linear_generator(unit->GenModeR, unit->GenModeR == GL_EYE_LINEAR ?
-                          unit->EyePlaneR : unit->ObjectPlaneR)) return GL_FALSE;
-    if ((unit->TexGenEnabled & Q_BIT) &&
-        !linear_generator(unit->GenModeQ, unit->GenModeQ == GL_EYE_LINEAR ?
-                          unit->EyePlaneQ : unit->ObjectPlaneQ)) return GL_FALSE;
-    for (i = 0; i < 16; ++i)
-        if (!finite_number(ctx->TextureMatrix[0].m[i])) return GL_FALSE;
+    /* Capture receives post-TNL coordinates: texgen and the texture
+     * matrix have already been applied by Mesa. */
+    if (!captured_rgb) {
+        if ((unit->TexGenEnabled & S_BIT) &&
+            !linear_generator(unit->GenModeS, unit->GenModeS == GL_EYE_LINEAR ?
+                              unit->EyePlaneS : unit->ObjectPlaneS)) return GL_FALSE;
+        if ((unit->TexGenEnabled & T_BIT) &&
+            !linear_generator(unit->GenModeT, unit->GenModeT == GL_EYE_LINEAR ?
+                              unit->EyePlaneT : unit->ObjectPlaneT)) return GL_FALSE;
+        if ((unit->TexGenEnabled & R_BIT) &&
+            !linear_generator(unit->GenModeR, unit->GenModeR == GL_EYE_LINEAR ?
+                              unit->EyePlaneR : unit->ObjectPlaneR)) return GL_FALSE;
+        if ((unit->TexGenEnabled & Q_BIT) &&
+            !linear_generator(unit->GenModeQ, unit->GenModeQ == GL_EYE_LINEAR ?
+                              unit->EyePlaneQ : unit->ObjectPlaneQ)) return GL_FALSE;
+        for (i = 0; i < 16; ++i)
+            if (!finite_number(ctx->TextureMatrix[0].m[i])) return GL_FALSE;
+    }
     if (mipmapped(object->MinFilter)) {
         /* XGL documents pyramids halving both dimensions, ending when
          * the smaller dimension reaches one. Rectangular GL mip chains
@@ -166,6 +170,16 @@ GLboolean oldengl_xgl_texture_eligible(const GLcontext *ctx)
         if (height > 1) height /= 2;
     }
     return GL_TRUE;
+}
+
+GLboolean oldengl_xgl_texture_eligible(const GLcontext *ctx)
+{
+    return texture_eligible(ctx, GL_FALSE);
+}
+
+GLboolean oldengl_xgl_texture_rgb_eligible(const GLcontext *ctx)
+{
+    return texture_eligible(ctx, GL_TRUE);
 }
 
 OldenGLXGLTexture *oldengl_xgl_texture_create(Xgl_sys_state system)
@@ -284,7 +298,7 @@ GLboolean oldengl_xgl_texture_configure(OldenGLXGLTexture *state,
     GLuint levels;
     GLboolean changed;
     unsigned long serial;
-    if (!state || !native || !oldengl_xgl_texture_eligible(ctx)) return GL_FALSE;
+    if (!state || !native || !oldengl_xgl_texture_rgb_eligible(ctx)) return GL_FALSE;
     serial = oldengl_xgl_error_serial();
     if (!ctx->Texture._ReallyEnabled) {
         xgl_object_set(native, XGL_3D_CTX_SURF_FRONT_TMAP_NUM, (Xgl_usgn32)0,

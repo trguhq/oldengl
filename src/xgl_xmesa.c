@@ -47,7 +47,11 @@ surface(struct accelerated_context *n, GLboolean object_space)
     if ((disabled && *disabled && *disabled != '0') || !b ||
         b->pixmap_flag || b->pbuffer_flag ||
         (n->ctx->Color.DriverDrawBuffer != GL_FRONT_LEFT &&
-         !(object_space && n->ctx->Color.DriverDrawBuffer == GL_BACK_LEFT && b->db_state)) ||
+         !(object_space &&
+           ((n->ctx->Color.DriverDrawBuffer == GL_BACK_LEFT && b->db_state) ||
+            n->ctx->Color.DriverDrawBuffer == GL_NONE ||
+            n->ctx->Color.DriverDrawBuffer == GL_FRONT_AND_BACK ||
+            n->ctx->Color.DriverDrawBuffer == GL_LEFT))) ||
         (xm->xm_visual->visinfo->class != TrueColor &&
          xm->xm_visual->visinfo->class != DirectColor))
         return NULL;
@@ -160,7 +164,9 @@ static void
 point(GLcontext *ctx, const SWvertex *v)
 {
     struct accelerated_context *n = find(ctx);
-    if (!oldengl_xgl_accel_point(begin_native(n), ctx, v))
+    if (oldengl_xgl_accel_point(begin_native(n), ctx, v)) return;
+    _mesa_flush_pb(ctx);
+    if (!oldengl_xgl_accel_hybrid(surface(n, GL_TRUE), ctx, GL_POINTS, v, NULL, NULL))
         n->point(ctx, v);
 }
 
@@ -168,7 +174,9 @@ static void
 line(GLcontext *ctx, const SWvertex *a, const SWvertex *b)
 {
     struct accelerated_context *n = find(ctx);
-    if (!oldengl_xgl_accel_line(begin_native(n), ctx, a, b))
+    if (oldengl_xgl_accel_line(begin_native(n), ctx, a, b)) return;
+    _mesa_flush_pb(ctx);
+    if (!oldengl_xgl_accel_hybrid(surface(n, GL_TRUE), ctx, GL_LINES, a, b, NULL))
         n->line(ctx, a, b);
 }
 
@@ -177,7 +185,9 @@ triangle(GLcontext *ctx, const SWvertex *a, const SWvertex *b,
          const SWvertex *c)
 {
     struct accelerated_context *n = find(ctx);
-    if (!oldengl_xgl_accel_triangle(begin_native(n), ctx, a, b, c))
+    if (oldengl_xgl_accel_triangle(begin_native(n), ctx, a, b, c)) return;
+    _mesa_flush_pb(ctx);
+    if (!oldengl_xgl_accel_hybrid(surface(n, GL_TRUE), ctx, GL_TRIANGLES, a, b, c))
         n->triangle(ctx, a, b, c);
 }
 

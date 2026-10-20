@@ -2,7 +2,8 @@
 
 The default build and installation select the XGL-backed GLX library.
 Rendering tries its object-space XGL path first, then the native raster path
-for Mesa-processed vertices, before using software rasterization when needed.
+for Mesa-processed vertices, then hybrid native rasterization with software
+fragment processing before using full software rasterization when needed.
 No environment-variable opt-in is required. `make software`,
 `make glx-software` and `make install-software` are explicit software choices.
 
@@ -21,13 +22,14 @@ calling them does not establish that every stage executes on graphics
 hardware. Actual acceleration depends on the adapter and its XGL driver.
 The native Sun SDK and target hardware have not been available for validation.
 
-## Native state coverage
+## Direct native state coverage
 
 Native dispatch requires a front-left or back-left X window buffer, an RGB
 TrueColor or DirectColor visual with at least eight bits per color channel,
-no alpha buffer, and full RGB writes. Unsupported batches continue through
-Mesa. `OLDENGL_NO_XGL=1` explicitly forces software rendering; leaving it
-unset or setting it to zero keeps native dispatch enabled.
+no alpha buffer, and full RGB writes. Other draws continue through Mesa
+vertex processing and can use the hybrid path described below.
+`OLDENGL_NO_XGL=1` explicitly forces software rendering; leaving it unset or
+setting it to zero keeps native dispatch enabled.
 
 State that leaves fragments unchanged does not force software: alpha testing
 with `GL_ALWAYS`, color logic with `GL_COPY`, additive blending with source
@@ -65,6 +67,51 @@ lighting, texture maps and native depth state are reset so they cannot be
 applied twice. Thus some scenes with software vertex processing can still
 use eligible XGL raster operations.
 
+## Hybrid fragment processing
+
+`src/xgl_hybrid.c` captures one Mesa-processed point, line or filled triangle
+in a nondisplayed XGL window buffer. XGL supplies primary RGB and coverage;
+temporary native Z distinguishes covered fragments from untouched pixels,
+including fragments whose color is black. Both readbacks must succeed before
+any application color, alpha, depth or stencil is changed. On capture failure,
+the untouched primitive can be rendered by the ordinary software rasterizer.
+
+`src/xgl_fragments.c` reconstructs alpha, GL depth, fog and texture attributes
+from the post-TNL vertices and feeds contiguous covered spans into Mesa's
+existing fragment pipeline. Triangle depth reconstruction reuses Mesa's snapped
+vertex positions and stepped Z interpolation, preserving varying-Z
+`GL_EQUAL` comparisons with software draws. This reconstructs attributes only;
+fragment coverage always comes from XGL. Enabled alpha tests, stencil/depth, fog, blending,
+logic operations, channel masks, scissor, polygon stipple, separate specular
+color and occlusion results are applied there. Hybrid depth and stencil tests
+run in Mesa so software alpha/stencil dependencies retain GL ordering. The
+direct native path remains preferred when all fragment state is compatible.
+CPU vertex processing also handles lighting and clipping modes outside the
+direct native subset. This path supports alpha-buffer visuals, front/back,
+`GL_FRONT_AND_BACK` and `GL_NONE` destinations.
+
+Every primitive is captured and committed before the next primitive starts.
+Capturing a whole draw as one image would lose overlapping transparent
+fragments and alpha/stencil side effects. The implementation preserves those
+individual fragments rather than applying effects to a completed image.
+
+Compatible unit-zero 2D RGB texture sampling can remain in XGL. Reconstructed
+clip W preserves perspective correction after software vertex processing.
+Because XGL does not export framebuffer alpha, Mesa samples the texture for
+alpha, discards that sampling's RGB result, and retains the native RGB result.
+Other texture modes use Mesa sampling on XGL-covered fragments. The texture
+stage is applied once to the retained RGB; subsequent fragment effects use
+the same Mesa span pipeline.
+
+Hybrid capture requires RGB TrueColor or DirectColor windows with at least
+eight bits per color channel, an allocated hidden XGL buffer, and readable
+native Z. It supports unit, nonsmoothed points and lines, and nonsmoothed
+filled triangles. Polygon stipple, two-sided materials and polygon offset can
+be handled around native rasterization. Large or attenuated points, wide or
+stippled lines, antialiasing, color-index rendering, pixmaps, pbuffers,
+selection/feedback, invalid projective interpolants and unavailable capture
+resources retain full software rendering.
+
 ## Texture mapping
 
 `src/xgl_texture.c` maps the active GL texture object to a native XGL MipMap
@@ -96,10 +143,11 @@ The native subset supports:
   a batch; varying projective q uses software.
 
 Textures on points or lines, multiple texture units, 1D/3D/cube textures,
-sphere-map texgen, compressed images, anisotropy, texture comparison and
-unsupported LOD constraints use Mesa. Alpha-buffer visuals and alpha tests
-or framebuffer blending that change fragment results use software, even when the texture itself is
-otherwise eligible.
+compressed images, anisotropy, texture comparison and
+unsupported LOD constraints use Mesa texture sampling. Where capture is
+available, this preserves XGL rasterization. Alpha-buffer visuals and effective
+alpha tests or blending can also use the hybrid path. Software sphere-map
+texgen can feed native RGB texture sampling after vertex processing.
 
 ## Shared color and depth results
 
@@ -112,20 +160,24 @@ pixel ownership rules still apply to obscured window regions.
 Mesa's retained back color image and depth image remain authoritative between
 native batches. Before native depth testing, depth values are copied into the
 native Z buffer; after successful rendering they are copied back for GL
-readback and software fallback. Color-free depth probes measure whether each
-native primitive rounds or truncates Z, and viewport mapping compensates for
-Mesa's conversion. Unrecognized conversion or incompatible mixed-primitive
-mappings use software. Device interpolation precision still needs target
-validation. Back color follows the same upload/render/
+readback and software fallback. Depth probes in the hidden buffer measure
+whether each native primitive rounds or truncates Z, and viewport mapping
+compensates for Mesa's conversion. Unrecognized conversion or incompatible
+mixed-primitive mappings use software. Device interpolation precision still
+needs target validation. Back color follows the same upload/render/
 download sequence through a second XGL window buffer. `glXSwapBuffers`
 presents the updated XMesa image. This does not promise native page flipping
 or vertical synchronization. Transfers and synchronization prioritize correct
-mixed rendering; no performance improvement has been measured.
+mixed rendering; no performance improvement has been measured. Hybrid capture
+adds synchronization and readbacks for every primitive, so it can be slower
+than software. XGL window copies in obscured regions are device-dependent;
+confirm pixel ownership and readback behavior on the target driver.
 
-Stencil, occlusion, effective alpha tests/blending/logic operations, fog,
-partial scissor, user clip planes, partial RGB masks, alpha-buffer visuals, pixmaps,
-pbuffers, selection and feedback use software. Native context creation or
-device errors disable the affected native path and retain software fallback.
+Hybrid fragment processing uses the same authoritative Mesa color, alpha,
+depth and stencil storage. Scratch native Z never becomes application GL depth.
+Native context creation or device errors disable the affected native path and
+retain software fallback. Pixmaps, pbuffers and selection/feedback continue
+through their existing software implementations.
 `src/xgl_session.c` shares the process-wide XGL System State.
 
 The original `XGLMesa*` convenience binding is separate: it renders to a
@@ -143,6 +195,9 @@ follow the Programmer's Guide, chapter 17: pages 455–459 cover 32-bit
 `0xAABBGGRR` texels and application mip levels; pages 463–465 cover final-color
 composition; pages 468–472 cover filtering, perspective correction and data
 coordinates; and pages 481–483 specify bottom-left texture coordinates.
+The Reference Manual, page 234, limits `XGL_RENDER_Z_BUFFER` to raster
+operations: geometry probes and capture use `XGL_RENDER_DRAW_BUFFER`, with
+Z writes controlled by HLHSR. The hidden buffer is never selected for display.
 
 Tests with synthetic SDK declarations and an Xlib-backed XGL fixture check
 command routing, buffer exchanges and fallback behavior. They do not verify

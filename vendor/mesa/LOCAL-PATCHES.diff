@@ -252,3 +252,213 @@
 +   /* GenTextures reserves names; the first binding creates the GL object. */
 +   return obj && obj->Target != 0;
 +}
+--- a/src/swrast/s_stencil.c
++++ b/src/swrast/s_stencil.c
+@@ -413,8 +413,8 @@
+  *         mask - array [n] of flags  (1=test this pixel, 0=skip the pixel)
+  * Output:  stencil - modified stencil values
+  *          mask - array [n] of flags (1=stencil and depth test passed)
+- * Return: GL_TRUE - all fragments failed the testing
+- *         GL_FALSE - one or more fragments passed the testing
++ * Return: GL_TRUE - one or more fragments passed the testing
++ *         GL_FALSE - all fragments failed the testing
+  *
+  */
+ static GLboolean
+@@ -422,6 +422,7 @@
+                         const GLdepth z[], GLstencil stencil[],
+                         GLubyte mask[] )
+ {
++   GLuint i;
+    ASSERT(ctx->Stencil.Enabled);
+    ASSERT(n <= PB_SIZE);
+ 
+@@ -483,7 +484,13 @@
+       }
+    }
+ 
+-   return GL_TRUE;  /* one or more fragments passed both tests */
++   /* Depth testing may reject every fragment which passed stencil.
++    * Preserve all stencil side effects before reporting visibility. */
++   for (i = 0; i < n; i++) {
++      if (mask[i])
++         return GL_TRUE;
++   }
++   return GL_FALSE;
+ }
+ 
+ 
+@@ -496,8 +503,8 @@
+  *         z - array [n] of z values
+  *         mask - array [n] of flags  (1=test this pixel, 0=skip the pixel)
+  * Output:  mask - array [n] of flags (1=stencil and depth test passed)
+- * Return: GL_TRUE - all fragments failed the testing
+- *         GL_FALSE - one or more fragments passed the testing
++ * Return: GL_TRUE - one or more fragments passed the testing
++ *         GL_FALSE - all fragments failed the testing
+  *
+  */
+ GLboolean
+@@ -508,6 +515,7 @@
+    GLstencil stencilRow[MAX_WIDTH];
+    GLstencil *stencil;
+    GLboolean result;
++   GLubyte originalMask[MAX_WIDTH];
+ 
+    ASSERT(ctx->Stencil.Enabled);
+    ASSERT(n <= MAX_WIDTH);
+@@ -518,6 +526,7 @@
+       /* Get stencil values from the hardware stencil buffer */
+       (*swrast->Driver.ReadStencilSpan)(ctx, n, x, y, stencilRow);
+       stencil = stencilRow;
++      MEMCPY(originalMask, mask, n * sizeof(GLubyte));
+    }
+    else {
+       /* software stencil buffer */
+@@ -529,7 +538,8 @@
+ 
+    if (swrast->Driver.WriteStencilSpan) {
+       /* Write updated stencil values into hardware stencil buffer */
+-      (swrast->Driver.WriteStencilSpan)(ctx, n, x, y, stencil, mask );
++      /* Stencil-fail and depth-fail operations also modify stencil. */
++      (swrast->Driver.WriteStencilSpan)(ctx, n, x, y, stencil, originalMask );
+    }
+ 
+    return result;
+--- a/src/swrast/s_readpix.c
++++ b/src/swrast/s_readpix.c
+@@ -42,6 +42,37 @@
+ 
+ 
+ 
++/* Restore destination reads used by blending and logic operations. A draw
++ * selection may name several buffers or GL_NONE, while SetReadBuffer must
++ * always receive one concrete buffer. Multi-draw span writers select each
++ * actual destination explicitly; GL_NONE has no color destination. */
++static void
++restore_draw_read_buffer( GLcontext *ctx )
++{
++   SWcontext *swrast = SWRAST_CONTEXT(ctx);
++   GLenum mode = ctx->Color.DriverDrawBuffer;
++   switch (mode) {
++   case GL_FRONT_LEFT:
++   case GL_FRONT_RIGHT:
++   case GL_BACK_LEFT:
++   case GL_BACK_RIGHT:
++      break;
++   default:
++      if (ctx->Color.DrawDestMask & FRONT_LEFT_BIT)
++         mode = GL_FRONT_LEFT;
++      else if (ctx->Color.DrawDestMask & FRONT_RIGHT_BIT)
++         mode = GL_FRONT_RIGHT;
++      else if (ctx->Color.DrawDestMask & BACK_LEFT_BIT)
++         mode = GL_BACK_LEFT;
++      else if (ctx->Color.DrawDestMask & BACK_RIGHT_BIT)
++         mode = GL_BACK_RIGHT;
++      else
++         mode = GL_FRONT_LEFT;
++   }
++   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, mode);
++}
++
++
+ /*
+  * Read a block of color index pixels.
+  */
+@@ -81,8 +112,7 @@
+                             &ctx->Pack, ctx->_ImageTransferState);
+    }
+ 
+-   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer,
+-                                ctx->Color.DriverDrawBuffer);
++   restore_draw_read_buffer(ctx);
+ }
+ 
+ 
+@@ -330,8 +360,7 @@
+    if (read_fast_rgba_pixels( ctx, x, y, width, height,
+                               format, type, pixels, packing )) {
+ 
+-      (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
+-      return; /* done! */
++      goto read_done; /* done! */
+    }
+ 
+    readWidth = (width > MAX_WIDTH) ? MAX_WIDTH : width;
+@@ -361,13 +390,13 @@
+          break;
+       default:
+          _mesa_error( ctx, GL_INVALID_ENUM, "glReadPixels(type)" );
+-         return;
++         goto read_done;
+    }
+ 
+    if (!_mesa_is_legal_format_and_type(format, type) ||
+        format == GL_INTENSITY) {
+       _mesa_error(ctx, GL_INVALID_OPERATION, "glReadPixels(format or type)");
+-      return;
++      goto read_done;
+    }
+ 
+    if (ctx->Pixel.Convolution2DEnabled || ctx->Pixel.Separable2DEnabled) {
+@@ -378,13 +407,13 @@
+       tmpImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
+       if (!tmpImage) {
+          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
+-         return;
++         goto read_done;
+       }
+       convImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
+       if (!convImage) {
+          FREE(tmpImage);
+          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
+-         return;
++         goto read_done;
+       }
+ 
+       /* read full RGBA, FLOAT image */
+@@ -458,7 +487,7 @@
+              * buffers, for example.
+              */
+             DEFMARRAY(GLfloat, rgbaf, MAX_WIDTH, 4);  /* mac 32k limitation */
+-            CHECKARRAY(rgbaf, return);  /* mac 32k limitation */
++            CHECKARRAY(rgbaf, goto read_done);  /* mac 32k limitation */
+             _mesa_chan_to_float_span(ctx, readWidth,
+                                      (CONST GLchan (*)[4]) rgba, rgbaf);
+             _mesa_pack_float_rgba_span(ctx, readWidth,
+@@ -476,7 +505,8 @@
+       }
+    }
+ 
+-   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
++read_done:
++   restore_draw_read_buffer(ctx);
+ }
+ 
+ 
+--- a/src/swrast/s_tritemp.h
++++ b/src/swrast/s_tritemp.h
+@@ -218,7 +218,9 @@
+    }
+ 
+ #ifndef DO_OCCLUSION_TEST
+-   ctx->OcclusionResult = GL_TRUE;
++   /* Occlusion queries must wait for the fragment tests in span writers. */
++   if (!ctx->Depth.OcclusionTest)
++      ctx->OcclusionResult = GL_TRUE;
+ #endif
+ 
+    /* Edge setup.  For a triangle strip these could be reused... */
+--- a/src/swrast/s_aatritemp.h
++++ b/src/swrast/s_aatritemp.h
+@@ -153,7 +153,9 @@
+    }
+ 
+ #ifndef DO_OCCLUSION_TEST
+-   ctx->OcclusionResult = GL_TRUE;
++   /* Occlusion queries must wait for the fragment tests in span writers. */
++   if (!ctx->Depth.OcclusionTest)
++      ctx->OcclusionResult = GL_TRUE;
+ #endif
+ 
+    /* Plane equation setup:

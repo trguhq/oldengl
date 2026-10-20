@@ -11,6 +11,7 @@ struct oldengl_xgl_accel_stats {
     unsigned long points, lines, triangles, clears, copies, fallbacks;
     unsigned long object_batches, transformed_vertices, lit_vertices;
     unsigned long depth_batches, back_batches, textured_vertices;
+    unsigned long hybrid_primitives, hybrid_fragments, hybrid_textured;
 };
 
 struct oldengl_xgl_batch;
@@ -35,6 +36,10 @@ GLboolean oldengl_xgl_accel_line(OldenGLXGLAccel *, GLcontext *,
 GLboolean oldengl_xgl_accel_triangle(OldenGLXGLAccel *, GLcontext *,
                                     const SWvertex *, const SWvertex *,
                                     const SWvertex *);
+/* Capture one post-TNL primitive, then run Mesa fragment stages in order.
+ * False is returned before any application buffer has been modified. */
+GLboolean oldengl_xgl_accel_hybrid(OldenGLXGLAccel *, GLcontext *, GLenum,
+    const SWvertex *, const SWvertex *, const SWvertex *);
 GLboolean oldengl_xgl_accel_clear(OldenGLXGLAccel *, GLcontext *);
 GLboolean oldengl_xgl_accel_copy_pixels(OldenGLXGLAccel *, GLcontext *,
                                        GLint, GLint, GLsizei, GLsizei,

@@ -413,8 +413,8 @@ do_stencil_test( GLcontext *ctx, GLuint n, GLstencil stencil[],
  *         mask - array [n] of flags  (1=test this pixel, 0=skip the pixel)
  * Output:  stencil - modified stencil values
  *          mask - array [n] of flags (1=stencil and depth test passed)
- * Return: GL_TRUE - all fragments failed the testing
- *         GL_FALSE - one or more fragments passed the testing
+ * Return: GL_TRUE - one or more fragments passed the testing
+ *         GL_FALSE - all fragments failed the testing
  *
  */
 static GLboolean
@@ -422,6 +422,7 @@ stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
                         const GLdepth z[], GLstencil stencil[],
                         GLubyte mask[] )
 {
+   GLuint i;
    ASSERT(ctx->Stencil.Enabled);
    ASSERT(n <= PB_SIZE);
 
@@ -483,7 +484,13 @@ stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
       }
    }
 
-   return GL_TRUE;  /* one or more fragments passed both tests */
+   /* Depth testing may reject every fragment which passed stencil.
+    * Preserve all stencil side effects before reporting visibility. */
+   for (i = 0; i < n; i++) {
+      if (mask[i])
+         return GL_TRUE;
+   }
+   return GL_FALSE;
 }
 
 
@@ -496,8 +503,8 @@ stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
  *         z - array [n] of z values
  *         mask - array [n] of flags  (1=test this pixel, 0=skip the pixel)
  * Output:  mask - array [n] of flags (1=stencil and depth test passed)
- * Return: GL_TRUE - all fragments failed the testing
- *         GL_FALSE - one or more fragments passed the testing
+ * Return: GL_TRUE - one or more fragments passed the testing
+ *         GL_FALSE - all fragments failed the testing
  *
  */
 GLboolean
@@ -508,6 +515,7 @@ _mesa_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
    GLstencil stencilRow[MAX_WIDTH];
    GLstencil *stencil;
    GLboolean result;
+   GLubyte originalMask[MAX_WIDTH];
 
    ASSERT(ctx->Stencil.Enabled);
    ASSERT(n <= MAX_WIDTH);
@@ -518,6 +526,7 @@ _mesa_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
       /* Get stencil values from the hardware stencil buffer */
       (*swrast->Driver.ReadStencilSpan)(ctx, n, x, y, stencilRow);
       stencil = stencilRow;
+      MEMCPY(originalMask, mask, n * sizeof(GLubyte));
    }
    else {
       /* software stencil buffer */
@@ -529,7 +538,8 @@ _mesa_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
 
    if (swrast->Driver.WriteStencilSpan) {
       /* Write updated stencil values into hardware stencil buffer */
-      (swrast->Driver.WriteStencilSpan)(ctx, n, x, y, stencil, mask );
+      /* Stencil-fail and depth-fail operations also modify stencil. */
+      (swrast->Driver.WriteStencilSpan)(ctx, n, x, y, stencil, originalMask );
    }
 
    return result;

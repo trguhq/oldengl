@@ -10,6 +10,8 @@ typedef struct oldengl_xgl_texture OldenGLXGLTexture;
 OldenGLXGLTexture *oldengl_xgl_texture_create(Xgl_sys_state);
 void oldengl_xgl_texture_destroy(OldenGLXGLTexture *);
 GLboolean oldengl_xgl_texture_eligible(const GLcontext *);
+/* RGB-only capture can retain framebuffer alpha in Mesa separately. */
+GLboolean oldengl_xgl_texture_rgb_eligible(const GLcontext *);
 GLboolean oldengl_xgl_texture_configure(OldenGLXGLTexture *, Xgl_ctx,
                                       const GLcontext *);
 GLboolean oldengl_xgl_texture_coordinates(const GLcontext *,

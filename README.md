@@ -20,9 +20,13 @@ Software-only builds require explicit `make software` or `make glx-software`;
 The GLX path submits eligible object-space geometry to XGL for model/view and
 perspective transforms, clipping, ambient/diffuse lighting, texture mapping,
 depth testing, and rasterization. It can draw to front and back window buffers.
-Mesa handles unsupported state combinations and keeps software rendering and
-readback coherent with native draws. XGL selects its device implementation;
-actual hardware coverage depends on the installed graphics adapter and driver.
+When a draw needs software fragment effects, a hybrid path still rasterizes
+each primitive with XGL, then applies Mesa alpha, stencil/depth, fog, blending,
+logic, masks, and unsupported texture operations before committing pixels.
+It preserves primitive order and shared color/depth results; unavailable capture
+resources or unsupported rasterization use the full software renderer.
+XGL selects its device implementation; actual hardware coverage depends on
+the installed graphics adapter and driver.
 See [acceleration coverage](docs/ACCELERATION.md) and [GLX details](docs/GLX.md)
 for the supported combinations and remaining software operations.
 
@@ -79,8 +83,10 @@ Include `<GL/gl.h>` and `<GL/glx.h>`, choose a visual or FBConfig, create a
 context with `direct=True`, then use ordinary `glXMakeCurrent`, GL calls,
 and `glXSwapBuffers`. GLX double-buffered contexts have separate front and
 back buffers. Eligible `GL_FRONT` and `GL_BACK` window rendering uses XGL;
-back-buffer acceleration requires two allocated XGL window buffers. Color and
-depth transfers preserve mixed native/software results. No opt-in variable is
+back-buffer acceleration requires two allocated XGL window buffers. Hybrid
+fragment processing also requires a hidden XGL buffer and readable native Z
+for coverage, and supports alpha-buffer visuals. Color and depth transfers
+preserve mixed native/software results. No opt-in variable is
 needed: unset or zero `OLDENGL_NO_XGL` keeps XGL enabled;
 `OLDENGL_NO_XGL=1` explicitly forces software rendering for comparison.
 
@@ -147,6 +153,7 @@ make test
 make test-accel
 make test-tnl
 make test-texture
+make test-fragments
 ```
 
 This builds `lib/liboldengl.a` and `.so` with `<GL/osmesa.h>` for offscreen

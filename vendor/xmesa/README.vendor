@@ -14,3 +14,7 @@ and validation; native XGL acceleration hooks are explicitly conditional.
 The conditional native build also installs OldenGL's object-space transform,
 lighting, clipping and texture stage before the standard Mesa TNL pipeline.
 LOCAL-PATCHES.diff records the exact integration changes.
+
+Hybrid fragment readback correction:
+* src/xm_dd.c: select back-buffer availability and pixmaps from the actual
+  read target, preserving separate draw/read drawable behavior.

@@ -13,14 +13,21 @@ The following results distinguish software behavior from native XGL execution.
 | `./tests/test_xgl` | 141 assertions using the real renderer and test-only XGL/Xlib fixtures |
 | `make test-accel` | 40 checks of native raster dispatch and software fallback using a synthetic SDK |
 | `make test-tnl` | 97 checks of object-space primitive expansion, raw attribute import and pre-transform stage dispatch |
-| `make test-texture` | 40 strict-C89 checks of native texture eligibility, image upload, sampling state and coordinate conversion |
+| `make test-texture` | 42 strict-C89 checks of native texture eligibility, image upload, sampling state and coordinate conversion |
+| `make test-fragments` | 37 real Mesa checks for captured RGB, reconstructed attributes and ordered alpha/stencil/depth effects |
 | `make test-glx` with Xvfb | 91 assertions using real Xlib windows and the software GLX binding |
+| `make test-glx-accel` with Xvfb | 308 checks using real Xlib windows, native XMesa hooks and a synthetic XGL runtime |
 | `python3 tests/check_glx_api.py lib/libGLsoft.a` | All 39 GLX 1.0–1.4 functions declared and defined |
 | `python3 tests/check_api.py lib/liboldengl.a` | All 336 OpenGL 1.1 functions declared and defined |
 | Same API audit with `lib/liboldengl.so` | All 336 functions in the shared library |
 | Strict C89 adapter/test compilation | `-std=c89 -Wall -Wextra -pedantic` |
 | Adapter, conversion, fixture and integration-test sanitizers | AddressSanitizer and UndefinedBehaviorSanitizer; renderer archive is not instrumented |
 | SPARC preprocessor configurations | Sun `__sparc`, `__sparc__`, and `sparc` spellings select big-endian packing and C89 float-math fallbacks |
+
+All 849 behavioral assertions/checks pass, excluding the separate API audits.
+The 308 native GLX/hybrid checks and 37 captured-fragment checks also pass
+with ASan/UBSan and leak detection. Those runs instrument the adapter and
+tests; the historical Mesa archive is not instrumented.
 
 These are regression checks, not official OpenGL conformance certification.
 An API export audit proves coverage of names, not every possible GL behavior.
@@ -82,9 +89,11 @@ For GLX deployment, also run `examples/glx_triangle` and
 `examples/glx_textured_cube --frames 120` on the target display. Compare
 with `OLDENGL_NO_XGL=1`, inspect transformed/clipped geometry, texture
 orientation and filtering, lighting, depth readback, and alternating native
-and software draws. Repeat with GL_FRONT/GL_BACK, resizing, shared texture
-updates, and each target graphics adapter. Verify the XGL driver actually
-accelerates the desired operations; host fixture results cannot establish it.
+and software draws. Exercise hybrid alpha/stencil/blending combinations and
+verify hidden-buffer allocation, native Z coverage, and obscured-window copies.
+Repeat with GL_FRONT/GL_BACK, resizing, shared texture updates, and each target
+graphics adapter. Verify the XGL driver actually accelerates the desired
+operations; host fixture results cannot establish it.
 
 ## Local corrections to the historical renderer
 
@@ -95,6 +104,20 @@ buffer selection, SPARC byte order/C89 math, Sun diagnostic compatibility,
 and portable extension-field offsets. The behavioral suite includes the
 texture-name and color-index regressions. No upstream checksum was changed
 to hide a local correction.
+
+Hybrid integration also corrects historical renderer behavior exposed by the
+new comparisons:
+
+- Triangle templates defer occlusion visibility to fragment tests instead of
+  marking triangles visible before alpha, stencil or depth rejection.
+- Stencil/depth spans report whether any fragment survives both tests while
+  preserving stencil-fail and depth-fail side effects.
+- Pixel readback restores a concrete draw-buffer destination, including
+  `GL_NONE` and multiple destinations, on normal and error paths.
+- XMesa selects read pixmaps and back-buffer availability from the actual read
+  drawable, preserving separate draw/read bindings.
+
+These corrections are recorded in the vendor provenance notes and patches.
 
 ## GLX and native dispatch additions
 
@@ -108,12 +131,26 @@ copying, pixmaps and pbuffers. The static/shared GLX libraries export the
 hooks, real Xlib windows, and a synthetic XGL runtime. The fixture implements
 model/view and projection transforms, homogeneous clipping, compatible
 ambient/diffuse lighting, perspective texture sampling, Z comparison and
-copies, and multiple window buffers so mixed-rendering results can be checked. This is distinct from
-merely calling native adapter helpers in isolation. The expanded suite passes
-112 checks, including texture sampling, mipmaps, updates, perspective correction,
-and software/native depth-equality transitions. Default/zero/disabled native
+copies, and multiple window buffers so mixed-rendering results can be checked.
+This is distinct from merely calling native adapter helpers in isolation. The
+expanded suite checks texture sampling, mipmaps, updates, perspective
+correction and software/native depth-equality transitions. Default/zero/disabled native
 routing, identity fragment operations, necessary software fallback and
 zero-specular local-viewer lighting are also covered.
+
+Hybrid scenes compare front/back color, depth and stencil results against
+explicit `OLDENGL_NO_XGL=1` references while requiring native raster calls.
+They cover ordered translucent overlap, black-fragment coverage, alpha rejection
+before stencil/depth writes, stencil/depth interaction, fog, masks, logic,
+polygon stipple, unsupported texture sampling, culling, polygon offset and
+alpha-buffer destination blending. Additional regressions exercise exact
+varying-Z `GL_EQUAL` transitions in both software/native directions, capture
+failure replay before any target-buffer commit, `GL_NONE`, multiple draw
+destinations, and independent draw/read drawable state. Triangle Z uses the
+same snapped and stepped interpolation as Mesa while XGL supplies coverage.
+The fixture follows the documented rule that geometry operators do nothing
+in Z-only render mode; native depth probes
+therefore render to the hidden color buffer with normal HLHSR Z writes.
 
 The native GLX library compiles against test SDK declarations on the host.
 Those declarations deliberately use synthetic constants and cannot establish
@@ -137,7 +174,7 @@ and GLX headers with their build outputs. Explicit `make install-software`
 stages only the portable renderer. The default build does not silently
 substitute a software-only library when the XGL SDK is missing.
 
-The native GLX routing suite passes 112 checks normally and with ASan/UBSan
+The native GLX routing and hybrid suites are run normally and with ASan/UBSan
 and leak detection; the Mesa archive itself is not instrumented. The separate
 native adapter suite passes 40 checks. These remain host fixture validations,
 with the target-machine SDK and hardware checks described above outstanding.

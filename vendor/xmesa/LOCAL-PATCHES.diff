@@ -1504,3 +1504,17 @@
        _swsetup_DestroyContext( c->gl_ctx );
        _swrast_DestroyContext( c->gl_ctx );
        _tnl_DestroyContext( c->gl_ctx );
+--- a/src/xm_dd.c
++++ b/src/xm_dd.c
+@@ -173,9 +173,9 @@
+       target->buffer = target->frontbuffer;
+       xmesa_update_span_funcs(ctx);
+    }
+-   else if (mode==GL_BACK_LEFT && xmesa->xm_read_buffer->db_state) {
++   else if (mode==GL_BACK_LEFT && target->db_state) {
+       if (target->backpixmap) {
+-         target->buffer = (XMesaDrawable)xmesa->xm_buffer->backpixmap;
++         target->buffer = (XMesaDrawable)target->backpixmap;
+       }
+       else if (target->backimage) {
+          target->buffer = None;

@@ -32,7 +32,7 @@ struct oldengl_mock_xgl {
     Xgl_usgn32 *back_pixels;
     int buffers, draw_buffer, display_buffer, source_buffer;
     int render_buffer, hlhsr, z_compare;
-    Xgl_usgn32 z_write;
+    Xgl_usgn32 z_write, plane_mask;
     Xgl_object local_model, view_transform;
     double matrix[4][4];
     int clip_flags;
@@ -69,18 +69,22 @@ static struct oldengl_mock_xgl dot;
 Xgl_marker xgl_marker_dot = &dot;
 static Xgl_sys_state active_system;
 static struct MockNativeXGLStats stats;
-static int fail_creation;
+static int fail_creation, fail_after_color_readback, color_readback_done;
 
 void MockNativeXGLReset(void)
 {
     assert(stats.live_objects == 0);
     memset(&stats, 0, sizeof(stats));
-    fail_creation = 0;
+    fail_creation = fail_after_color_readback = color_readback_done = 0;
     active_system = NULL;
 }
 
 void MockNativeXGLGetStats(struct MockNativeXGLStats *value) { *value = stats; }
 void MockNativeXGLFailNextCreation(int type) { fail_creation = type; }
+void MockNativeXGLFailAfterColorReadback(void)
+{
+    fail_after_color_readback = 1; color_readback_done = 0;
+}
 
 static unsigned int component(unsigned long pixel, unsigned long mask)
 {
@@ -237,7 +241,8 @@ static void write_pixel(struct surface *s, Xgl_ctx ctx,
         if (ctx->z_write) s->raster->z_pixels[y*s->width+x] = incoming;
     }
     if (ctx->render_buffer & XGL_RENDER_DRAW_BUFFER)
-        s->pixels[y*s->width+x] = color_word(value);
+        s->pixels[y*s->width+x] = (s->pixels[y*s->width+x] & ~ctx->plane_mask) |
+            (color_word(value) & ctx->plane_mask);
 }
 
 static void attributes(Xgl_object object, va_list args)
@@ -280,6 +285,7 @@ static void attributes(Xgl_object object, va_list args)
         case XGL_WIN_RAS_BUF_DRAW: object->draw_buffer = va_arg(args, int); break;
         case XGL_WIN_RAS_BUF_DISPLAY: object->display_buffer = va_arg(args, int); break;
         case XGL_CTX_RENDER_BUFFER: object->render_buffer = va_arg(args, int); break;
+        case XGL_CTX_PLANE_MASK: object->plane_mask = va_arg(args, Xgl_usgn32); break;
         case XGL_RAS_SOURCE_BUFFER: object->source_buffer = va_arg(args, int); break;
         case XGL_3D_CTX_HLHSR_MODE:
             object->hlhsr = va_arg(args, int);
@@ -386,7 +392,6 @@ static void attributes(Xgl_object object, va_list args)
         case XGL_SYS_ST_ERROR_DETECTION:
         case XGL_CTX_DEFERRAL_MODE:
         case XGL_CTX_ROP:
-        case XGL_CTX_PLANE_MASK:
         case XGL_CTX_RASTER_FILL_STYLE:
         case XGL_CTX_VDC_MAP:
         case XGL_CTX_VDC_ORIENTATION:
@@ -445,6 +450,7 @@ Xgl_object xgl_object_create(Xgl_sys_state state, Xgl_obj_type type,
     object->render_buffer = XGL_RENDER_DRAW_BUFFER;
     object->z_compare = XGL_Z_COMP_LESS_THAN_OR_EQUAL;
     object->z_write = 0xffffffffU;
+    object->plane_mask = 0xffffffffU;
     object->matrix[0][0] = object->matrix[1][1] = 1;
     object->matrix[2][2] = object->matrix[3][3] = 1;
     object->clip_bounds.xmin = object->clip_bounds.ymin = -1;
@@ -557,6 +563,15 @@ void xgl_context_copy_buffer(Xgl_ctx context, Xgl_bounds_i2d *rectangle,
 {
     struct surface src, dst;
     int x, y, sx, sy, dx, dy, width, height, saved_source_buffer;
+    if (fail_after_color_readback && color_readback_done &&
+        source->type == XGL_WIN_RAS && context->device->type == XGL_MEM_RAS &&
+        source->source_buffer == XGL_BUFFER_SEL_Z) {
+        fail_after_color_readback = color_readback_done = 0;
+        ++stats.injected_errors;
+        assert(active_system && active_system->notify);
+        active_system->notify(active_system);
+        return;
+    }
     if (source->source_buffer == XGL_BUFFER_SEL_Z) {
         Xgl_object destination = context->device;
         allocate_depth(source); allocate_depth(destination);
@@ -594,7 +609,10 @@ void xgl_context_copy_buffer(Xgl_ctx context, Xgl_bounds_i2d *rectangle,
     surface_end(&src, 0); surface_end(&dst, 1);
     ++stats.copies;
     if (source->type == XGL_MEM_RAS && context->device->type == XGL_WIN_RAS) ++stats.uploads;
-    if (source->type == XGL_WIN_RAS && context->device->type == XGL_MEM_RAS) ++stats.downloads;
+    if (source->type == XGL_WIN_RAS && context->device->type == XGL_MEM_RAS) {
+        ++stats.downloads;
+        if (fail_after_color_readback) color_readback_done = 1;
+    }
 }
 
 void xgl_transform_write_specific(Xgl_trans transform, void *matrix,
@@ -799,6 +817,9 @@ void xgl_multimarker(Xgl_ctx context, Xgl_pt_list *points)
     struct transformed_vertex vertex;
     unsigned int i;
     int plane, outside;
+    /* The real XGL API permits Z-only selection for raster operators, but
+     * primitive operators are no-ops without the draw buffer selected. */
+    if (!(context->render_buffer & XGL_RENDER_DRAW_BUFFER)) return;
     surface_begin(&s, context->device);
     for (i = 0; i < points->num_pts; ++i) {
         vertex = vertex_at(context, points, i);
@@ -824,6 +845,7 @@ void xgl_multipolyline(Xgl_ctx context, Xgl_bbox *bbox, Xgl_usgn32 count,
     int step, steps, plane, outside;
     double dx, dy, t, da, db;
     (void)bbox;
+    if (!(context->render_buffer & XGL_RENDER_DRAW_BUFFER)) return;
     surface_begin(&s, context->device);
     for (i = 0; i < count; ++i)
         for (j = 0; j+1 < points[i].num_pts; ++j) {
@@ -1029,6 +1051,7 @@ void xgl_triangle_list(Xgl_ctx context, Xgl_facet_list *facets,
     assert(!facets || facets->facet_type == XGL_FACET_NONE);
     assert(flags == 0 || flags == XGL_TLIST_FLAG_TRI_RESTART);
     assert(points->num_pts % 3 == 0);
+    if (!(context->render_buffer & XGL_RENDER_DRAW_BUFFER)) return;
     surface_begin(&s, context->device);
     for (i = 0; i < points->num_pts; i += 3) {
         for (j = 0; j < 3; ++j) polygon[j] = vertex_at(context, points, i+j);
