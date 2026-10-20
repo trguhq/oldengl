@@ -8,7 +8,7 @@ The following results distinguish software behavior from native XGL execution.
 
 | Check | Coverage |
 | --- | --- |
-| `make software CFLAGS='-O2 -fPIC -std=c89'` | Static and shared portable renderer libraries; no system GL dependency |
+| `make test CFLAGS='-O2 -fPIC -std=c89'` | Internal static/shared Mesa reference libraries under `build/test/`; no system GL dependency |
 | `./tests/test_gl` | 93 assertions in 13 behavior groups, using real offscreen rendering |
 | `./tests/test_xgl` | 141 assertions using the real renderer and test-only XGL/Xlib fixtures |
 | `make test-accel` | 40 checks of native raster dispatch and software fallback using a synthetic SDK |
@@ -19,9 +19,9 @@ The following results distinguish software behavior from native XGL execution.
 | `make test-lighting` | 38 checks of native spotlight mapping, material products, attenuation, compatibility and error handling |
 | `make test-glx` with Xvfb | 91 assertions using real Xlib windows and the software GLX binding |
 | `make test-glx-accel` with Xvfb | 716 checks using real Xlib windows, native XMesa hooks and a synthetic XGL runtime |
-| `python3 tests/check_glx_api.py lib/libGLsoft.a` | All 39 GLX 1.0–1.4 functions declared and defined |
-| `python3 tests/check_api.py lib/liboldengl.a` | All 336 OpenGL 1.1 functions declared and defined |
-| Same API audit with `lib/liboldengl.so` | All 336 functions in the shared library |
+| `python3 tests/check_glx_api.py build/test/libglx-reference.a` | All 39 GLX 1.0–1.4 functions declared and defined |
+| `python3 tests/check_api.py build/test/libmesa.a` | All 336 OpenGL 1.1 functions declared and defined |
+| Same API audit with `build/test/libmesa.so` | All 336 functions in the shared reference library |
 | Strict C89 adapter/test compilation | `-std=c89 -Wall -Wextra -pedantic` |
 | Adapter, conversion, fixture and integration-test sanitizers | AddressSanitizer and UndefinedBehaviorSanitizer; renderer archive is not instrumented |
 | SPARC preprocessor configurations | Sun `__sparc`, `__sparc__`, and `sparc` spellings select big-endian packing and C89 float-math fallbacks |
@@ -194,9 +194,11 @@ remaining software features.
 Plain `make` selects the native XGL-backed libraries. On the host this was
 verified with the synthetic SDK, followed by staged `make install` checks
 that compare the installed `libGL` and `libXGLMesa` archives/shared libraries
-and GLX headers with their build outputs. Explicit `make install-software`
-stages only the portable renderer. The default build does not silently
-substitute a software-only library when the XGL SDK is missing.
+and GLX headers with their build outputs. The public build and installation
+produce only the XGL-backed libraries. Internal Mesa and Mesa/Xlib reference
+libraries are generated under `build/test/` for tests and are never installed.
+The build does not silently substitute a software-only library when the XGL
+SDK is missing.
 
 The native GLX routing and hybrid suites are run normally and with ASan/UBSan
 and leak detection; the Mesa archive itself is not instrumented. The separate

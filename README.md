@@ -14,8 +14,8 @@ extension. Explicit indirect-context requests return NULL.
 Plain `make` and `make install` build and install the XGL-backed `libGL`.
 Native dispatch is enabled by default, with software fallback when the current
 operation or drawable cannot use the supported XGL path, or XGL fails.
-Software-only builds require explicit `make software` or `make glx-software`;
-`make install-software` installs the offscreen software renderer.
+The public build and installation produce the XGL-backed libraries. The
+software renderer remains bundled for unsupported operations and validation.
 
 The GLX path submits eligible object-space geometry to XGL for model/view and
 perspective transforms, clipping, ambient/diffuse lighting, texture mapping,
@@ -99,11 +99,11 @@ double-buffered GLX window. Build it with `make example` and the same native
 build variables, then run `examples/glx_textured_cube`. Press a key to quit,
 or use `--frames 120` for a bounded run. The example needs no GLU or GLUT.
 
-`make glx-software` builds `libGLsoft.a` and `.so` without an XGL SDK, using
-only Xlib. Set `X11_CPPFLAGS` and `X11_LIBS` if X11 is outside the default
-OpenWindows location. Run `make test-glx` with a valid `DISPLAY` to exercise
-real Xlib rendering. This implementation currently uses a single-threaded
-binding; no thread-safe GLX operation is claimed.
+Run `make test-glx` with a valid `DISPLAY` to exercise the GLX binding against
+its test-only Mesa/Xlib reference renderer. Set `X11_CPPFLAGS` and `X11_LIBS`
+if X11 is outside the default OpenWindows location. This implementation
+currently uses a single-threaded binding; no thread-safe GLX operation is
+claimed.
 
 ## Use the original XGLMesa binding
 
@@ -146,13 +146,13 @@ renderer with XGL presentation. Use GLX for the new geometry/raster dispatch
 and double-buffered contexts. GLU and GLUT are separate libraries.
 Color-index rendering remains available in software.
 
-## Build and test without XGL
+## Run development tests
 
-The software renderer can also run headlessly on a development host:
+The renderer and adapter tests can run headlessly on a development host
+without the Sun XGL SDK:
 
 ```sh
-make -j4 software
-make test
+make -j4 test
 make test-accel
 make test-tnl
 make test-texture
@@ -161,11 +161,13 @@ make test-clip
 make test-lighting
 ```
 
-This builds `lib/liboldengl.a` and `.so` with `<GL/osmesa.h>` for offscreen
-contexts. The behavioral test executable does not require Python. The API
-symbol audit uses Python 3 and GNU/BSD-style `nm`. XGL integration tests
-use test-only SDK mocks with the real renderer; they do not require Sun
-headers or libraries.
+These targets build internal reference libraries under `build/test/`, including
+`libmesa.a` and `.so` for offscreen test contexts. `make test-glx` additionally
+builds `build/test/libglx-reference.a` and requires an X server. These reference
+libraries are test artifacts and are not installed. The behavioral test
+executables do not require Python; the API symbol audits use Python 3 and
+GNU/BSD-style `nm`. XGL adapter tests use test-only SDK mocks with the real
+renderer; they do not require Sun headers or libraries.
 
 ## Validation limits
 

@@ -4,8 +4,9 @@ The default build and installation select the XGL-backed GLX library.
 Rendering tries its object-space XGL path first, then the native raster path
 for Mesa-processed vertices, then hybrid native rasterization with software
 fragment processing before using full software rasterization when needed.
-No environment-variable opt-in is required. `make software`,
-`make glx-software` and `make install-software` are explicit software choices.
+No environment-variable opt-in is required. The public build and installation
+produce the XGL-backed libraries; test targets keep their reference renderers
+under `build/test/`.
 
 The GLX build installs an object-space stage before Mesa's transform and
 lighting stages. `src/xgl_tnl.c` imports immediate-mode and array attributes
