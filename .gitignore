@@ -1,0 +1,11 @@
+*.o
+*.a
+*.so
+/tests/test_gl
+/tests/test_xgl
+/tests/test_glx
+/tests/test_accel
+/tests/test_glx_accel
+/examples/triangle
+/examples/glx_triangle
+/build/

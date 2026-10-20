@@ -1,0 +1,88 @@
+Mesa software rendering core vendored for OldenGL
+================================================
+
+Release family: Mesa 3-D Graphics Library 4.0.4 (October 2002), as imported
+by XFree86 and preserved in NetBSD xsrc. This source is a coherent snapshot
+of that import, including the XFree86/NetBSD maintenance in the pinned tree.
+
+Repository: https://github.com/NetBSD/xsrc.git
+Selected branch: netbsd-1-6
+Exact commit: 11b245db07732c501bc8bb4ca073f823a6c65b84
+Mesa root: xfree/xc/extras/Mesa
+Additional header: xfree/xc/lib/GL/include/GL/internal/glcore.h
+Transport: Git over HTTPS using the environment's authenticated Git proxy.
+
+Selection and layout
+--------------------
+The upstream portable renderer C sources and headers are retained without
+content changes. The original flat Mesa/src/ core is mapped to src/main/;
+glapi* and glthread* files are mapped to src/glapi/. Mesa/src/{math,tnl,
+array_cache,swrast,swrast_setup} retain their respective subdirectories;
+Mesa/src/OSmesa is mapped to src/drivers/osmesa/. Profiling-only highpc.c
+and lowpc.c, optional x86/SPARC assembly, GLX/Xlib drivers, hardware drivers,
+GLU, and GLUT are excluded. The source-map file lists original locations.
+
+Mesa/include/GL/{gl.h,glext.h,osmesa.h} are retained in include/GL/ and
+copied to OldenGL's public include/GL/. The required internal/glcore.h
+header is kept private in this vendor include directory. No runtime
+network fetch is necessary. The public headers/API include later features
+in addition to OpenGL 1.1. OldenGL builds only the portable software path.
+
+Why this source
+---------------
+Mesa 4.0.4 is a stable, portable C renderer with contemporary Sun Solaris
+compiler configurations. Some historical tags in CVS-converted upstream
+Git mirrors omit deleted source files and are not buildable snapshots.
+This complete XFree86 source import includes those files. Every selected
+C source has been checked with GCC in C89 mode on the development host;
+this is not a claim of a successful Sun compiler build or OpenGL
+conformance certification.
+
+License
+-------
+The selected Mesa renderer, offscreen driver, and Mesa-authored headers
+carry the MIT/X11-style permission notice preserved in each file; see
+LICENSE.MIT. glext.h and internal/glcore.h contain SGI Free Software
+License B Version 1.1 notices, also preserved in each file. See
+LICENSE.SGI-B-1.1 for that license's complete text. The latter license text
+was retrieved from the SPDX license-list-data repository over HTTPS:
+https://raw.githubusercontent.com/spdx/license-list-data/main/text/SGI-B-1.1.txt
+Individual file notices remain authoritative. OldenGL's root LICENSE does
+not replace these third-party notices. Excluded upstream components may
+have other licenses and are not covered by this selection statement.
+
+Integrity and local changes
+---------------------------
+UPSTREAM-SHA256 records SHA-256 values for all selected C/header files
+using their local paths. The initial import is byte-for-byte from the
+pinned NetBSD commit. Deliberate local corrections must be listed below;
+do not silently regenerate this upstream checksum list after a patch.
+
+Local corrections (covered by the OpenGL tests and portability checks):
+
+* src/main/glheader.h: recognize Solaris SPARC (__sun with __sparc__,
+  __sparc, or sparc) as big endian even without BYTE_ORDER system macros.
+  Packed texture conversions otherwise selected little-endian layouts.
+  Supply a C89 diagnostic-string fallback for GCC-only __FUNCTION__ on
+  other compilers, including Sun WorkShop.
+* src/main/mmath.h: recognize all three SPARC compiler spellings for
+  the existing C89 ceil/floor/fabs and IEEE float paths. Sun WorkShop does
+  not consistently define GCC's __sparc__ spelling; Solaris 2.6 need not
+  provide the later ceilf/floorf/fabsf interfaces.
+* src/main/extensions.c: compute extension-member offsets using C89
+  offsetof from <stddef.h>, avoiding pointer-to-int casts on LP64 hosts.
+* src/main/texobj.c: IsTexture returns false for a name only reserved by
+  GenTextures; it becomes a texture after its first binding, as required
+  by OpenGL 1.1 section 6.1.13.
+* src/drivers/osmesa/osmesa.c: color-index contexts request no accumulation
+  storage in either context constructor. Accumulation is an RGBA visual
+  facility; requesting it for color-index contexts triggered an assertion.
+
+LOCAL-PATCHES.diff contains these changes against the pinned NetBSD files.
+UPSTREAM-SHA256 intentionally retains the original pre-patch checksums.
+
+Further GLX integration corrections:
+* src/main/attrib.c and attrib.h: expose enable-group state copying for
+  GLX CopyContext and correct the header include guard.
+* src/main/context.c: copy enabled capabilities when GL_ENABLE_BIT is
+  selected and copy the complete lighting state instead of one light.

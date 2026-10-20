@@ -1,0 +1,12 @@
+Mesa 4.0.4 Xlib/XMesa and client-side GLX binding
+
+Source: https://github.com/NetBSD/xsrc.git
+Exact commit: 11b245db07732c501bc8bb4ca073f823a6c65b84
+Sources from xfree/xc/extras/Mesa/src/X; headers listed in SOURCE-MAP.
+Renderer sources carry preserved MIT/X11 notices. SGI headers retain
+their SGI Free Software License B 1.1 notices; complete licenses are
+in ../mesa/LICENSE.MIT and ../mesa/LICENSE.SGI-B-1.1.
+
+UPSTREAM-SHA256 records original file content, before local corrections.
+Local corrections implement missing GLX 1.3 behavior, context lifetime
+and validation; native XGL acceleration hooks are explicitly conditional.

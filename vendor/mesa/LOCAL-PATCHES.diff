@@ -1,0 +1,254 @@
+--- a/src/drivers/osmesa/osmesa.c
++++ b/src/drivers/osmesa/osmesa.c
+@@ -115,7 +115,8 @@
+ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
+ {
+    return OSMesaCreateContextExt(format, DEFAULT_SOFTWARE_DEPTH_BITS,
+-                                 8, 16, sharelist);
++                                 8, format == OSMESA_COLOR_INDEX ? 0 : 16,
++                                 sharelist);
+ }
+ 
+ 
+@@ -143,6 +144,8 @@
+       indexBits = 8;
+       rshift = gshift = bshift = ashift = 0;
+       rgbmode = GL_FALSE;
++      /* Accumulation buffers are defined only for RGB visuals. */
++      accumBits = 0;
+    }
+    else if (format==OSMESA_RGBA) {
+       indexBits = 0;
+--- a/src/main/attrib.c
++++ b/src/main/attrib.c
+@@ -430,6 +430,10 @@
+                    GL_SEPARABLE_2D);
+    TEST_AND_UPDATE(ctx->Fog.Enabled, enable->Fog, GL_FOG);
+    TEST_AND_UPDATE(ctx->Light.Enabled, enable->Lighting, GL_LIGHTING);
++   for (i = 0; i < MAX_LIGHTS; ++i) {
++      if (ctx->Light.Light[i].Enabled != enable->Light[i])
++         _mesa_set_enable(ctx, GL_LIGHT0 + i, enable->Light[i]);
++   }
+    TEST_AND_UPDATE(ctx->Line.SmoothFlag, enable->LineSmooth, GL_LINE_SMOOTH);
+    TEST_AND_UPDATE(ctx->Line.StippleFlag, enable->LineStipple,
+                    GL_LINE_STIPPLE);
+@@ -561,6 +565,81 @@
+ }
+ 
+ 
++/* OldenGL: GLX CopyContext must copy the enable group independently. */
++void
++_mesa_copy_enable_state(const GLcontext *ctx, GLcontext *destination)
++{
++   struct gl_enable_attrib state;
++   struct gl_enable_attrib *attr = &state;
++   GLuint i;
++      /* Copy enable flags from all other attributes into the enable struct. */
++      attr->AlphaTest = ctx->Color.AlphaEnabled;
++      attr->AutoNormal = ctx->Eval.AutoNormal;
++      attr->Blend = ctx->Color.BlendEnabled;
++      for (i=0;i<MAX_CLIP_PLANES;i++) {
++         attr->ClipPlane[i] = ctx->Transform.ClipEnabled[i];
++      }
++      attr->ColorMaterial = ctx->Light.ColorMaterialEnabled;
++      attr->Convolution1D = ctx->Pixel.Convolution1DEnabled;
++      attr->Convolution2D = ctx->Pixel.Convolution2DEnabled;
++      attr->Separable2D = ctx->Pixel.Separable2DEnabled;
++      attr->CullFace = ctx->Polygon.CullFlag;
++      attr->DepthTest = ctx->Depth.Test;
++      attr->Dither = ctx->Color.DitherFlag;
++      attr->Fog = ctx->Fog.Enabled;
++      for (i=0;i<MAX_LIGHTS;i++) {
++         attr->Light[i] = ctx->Light.Light[i].Enabled;
++      }
++      attr->Lighting = ctx->Light.Enabled;
++      attr->LineSmooth = ctx->Line.SmoothFlag;
++      attr->LineStipple = ctx->Line.StippleFlag;
++      attr->Histogram = ctx->Pixel.HistogramEnabled;
++      attr->MinMax = ctx->Pixel.MinMaxEnabled;
++      attr->IndexLogicOp = ctx->Color.IndexLogicOpEnabled;
++      attr->ColorLogicOp = ctx->Color.ColorLogicOpEnabled;
++      attr->Map1Color4 = ctx->Eval.Map1Color4;
++      attr->Map1Index = ctx->Eval.Map1Index;
++      attr->Map1Normal = ctx->Eval.Map1Normal;
++      attr->Map1TextureCoord1 = ctx->Eval.Map1TextureCoord1;
++      attr->Map1TextureCoord2 = ctx->Eval.Map1TextureCoord2;
++      attr->Map1TextureCoord3 = ctx->Eval.Map1TextureCoord3;
++      attr->Map1TextureCoord4 = ctx->Eval.Map1TextureCoord4;
++      attr->Map1Vertex3 = ctx->Eval.Map1Vertex3;
++      attr->Map1Vertex4 = ctx->Eval.Map1Vertex4;
++      attr->Map2Color4 = ctx->Eval.Map2Color4;
++      attr->Map2Index = ctx->Eval.Map2Index;
++      attr->Map2Normal = ctx->Eval.Map2Normal;
++      attr->Map2TextureCoord1 = ctx->Eval.Map2TextureCoord1;
++      attr->Map2TextureCoord2 = ctx->Eval.Map2TextureCoord2;
++      attr->Map2TextureCoord3 = ctx->Eval.Map2TextureCoord3;
++      attr->Map2TextureCoord4 = ctx->Eval.Map2TextureCoord4;
++      attr->Map2Vertex3 = ctx->Eval.Map2Vertex3;
++      attr->Map2Vertex4 = ctx->Eval.Map2Vertex4;
++      attr->Normalize = ctx->Transform.Normalize;
++      attr->RasterPositionUnclipped = ctx->Transform.RasterPositionUnclipped;
++      attr->PixelTexture = ctx->Pixel.PixelTextureEnabled;
++      attr->PointSmooth = ctx->Point.SmoothFlag;
++      attr->PolygonOffsetPoint = ctx->Polygon.OffsetPoint;
++      attr->PolygonOffsetLine = ctx->Polygon.OffsetLine;
++      attr->PolygonOffsetFill = ctx->Polygon.OffsetFill;
++      attr->PolygonSmooth = ctx->Polygon.SmoothFlag;
++      attr->PolygonStipple = ctx->Polygon.StippleFlag;
++      attr->RescaleNormals = ctx->Transform.RescaleNormals;
++      attr->Scissor = ctx->Scissor.Enabled;
++      attr->Stencil = ctx->Stencil.Enabled;
++      attr->MultisampleEnabled = ctx->Multisample.Enabled;
++      attr->SampleAlphaToCoverage = ctx->Multisample.SampleAlphaToCoverage;
++      attr->SampleAlphaToOne = ctx->Multisample.SampleAlphaToOne;
++      attr->SampleCoverage = ctx->Multisample.SampleCoverage;
++      attr->SampleCoverageInvert = ctx->Multisample.SampleCoverageInvert;
++      for (i=0; i<MAX_TEXTURE_UNITS; i++) {
++         attr->Texture[i] = ctx->Texture.Unit[i].Enabled;
++         attr->TexGen[i] = ctx->Texture.Unit[i].TexGenEnabled;
++      }
++   pop_enable_group(destination, &state);
++   destination->NewState = _NEW_ALL;
++}
++
+ static void
+ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
+ {
+--- a/src/main/attrib.h
++++ b/src/main/attrib.h
+@@ -25,10 +25,13 @@
+ 
+ 
+ #ifndef ATTRIB_H
+-#define ATTRIB_h
++#define ATTRIB_H
+ 
+ 
+ #include "mtypes.h"
++
++extern void
++_mesa_copy_enable_state(const GLcontext *, GLcontext *);
+ 
+ extern void
+ _mesa_PushAttrib( GLbitfield mask );
+--- a/src/main/context.c
++++ b/src/main/context.c
+@@ -28,6 +28,7 @@
+ #include "all.h"
+ #else
+ #include "glheader.h"
++#include "attrib.h"
+ #include "buffers.h"
+ #include "clip.h"
+ #include "colortab.h"
+@@ -1771,7 +1772,7 @@
+       dst->Depth = src->Depth;
+    }
+    if (mask & GL_ENABLE_BIT) {
+-      /* no op */
++      _mesa_copy_enable_state(src, dst);
+    }
+    if (mask & GL_EVAL_BIT) {
+       /* OK to memcpy */
+@@ -1788,7 +1789,7 @@
+    if (mask & GL_LIGHTING_BIT) {
+       GLuint i;
+       /* begin with memcpy */
+-      MEMCPY( &dst->Light, &src->Light, sizeof(struct gl_light) );
++      MEMCPY( &dst->Light, &src->Light, sizeof(dst->Light) );
+       /* fixup linked lists to prevent pointer insanity */
+       make_empty_list( &(dst->Light.EnabledList) );
+       for (i = 0; i < MAX_LIGHTS; i++) {
+--- a/src/main/extensions.c
++++ b/src/main/extensions.c
+@@ -28,6 +28,7 @@
+ #include "all.h"
+ #else
+ #include "glheader.h"
++#include <stddef.h>
+ #include "context.h"
+ #include "extensions.h"
+ #include "mem.h"
+@@ -46,7 +47,8 @@
+    void (*notify)( GLcontext *, GLboolean );
+ };
+ 
+-#define F(x) (int)&(((struct gl_extensions *)0)->x)
++/* OldenGL: standard C89 offset calculation also works on LP64 hosts. */
++#define F(x) (int)offsetof(struct gl_extensions, x)
+ #define ON GL_TRUE
+ #define OFF GL_FALSE
+ 
+--- a/src/main/glheader.h
++++ b/src/main/glheader.h
+@@ -168,7 +168,13 @@
+  * Try to use a runtime test instead.
+  * For now, only used by some DRI hardware drivers for color/texel packing.
+  */
+-#if defined(BYTE_ORDER) && defined(BIG_ENDIAN) && BYTE_ORDER == BIG_ENDIAN
++/* OldenGL: Sun WorkShop does not define GCC's __sparc__ spelling, and
++ * Solaris 2.6's system headers need not expose BYTE_ORDER to this file.
++ * Solaris SPARC is big endian regardless of the compiler spelling.
++ */
++#if (defined(BYTE_ORDER) && defined(BIG_ENDIAN) && BYTE_ORDER == BIG_ENDIAN) || \
++    (defined(__sun) && \
++     (defined(__sparc__) || defined(__sparc) || defined(sparc)))
+ #if defined(__linux__)
+ #include <byteswap.h>
+ #define CPU_TO_LE32( x )	bswap_32( x )
+@@ -192,6 +198,13 @@
+ 
+ #include "GL/gl.h"
+ #include "GL/glext.h"
++
++/* OldenGL: C89 Sun WorkShop has no GCC __FUNCTION__ diagnostic extension.
++ * The token is used only for optional debug messages in this source tree.
++ */
++#if !defined(__GNUC__) && !defined(__FUNCTION__)
++#define __FUNCTION__ "Mesa"
++#endif
+ 
+ 
+ #ifndef CAPI
+--- a/src/main/mmath.h
++++ b/src/main/mmath.h
+@@ -187,7 +187,11 @@
+ /*
+  * Single precision ceiling, floor, and absolute value functions
+  */
+-#if defined(__sparc__) /* XXX this probably isn't the ideal test */
++/* OldenGL: recognize Sun WorkShop as well as GCC's SPARC spelling.
++ * Solaris 2.6 provides the C89 double-precision functions, not a portable
++ * guarantee of the later ceilf/floorf/fabsf interfaces.
++ */
++#if defined(__sparc__) || defined(__sparc) || defined(sparc)
+ #define CEILF(x)   ceil(x)
+ #define FLOORF(x)  floor(x)
+ #define FABSF(x)   fabs(x)
+@@ -198,7 +202,8 @@
+ #endif
+ 
+ 
+-#if defined(__i386__) || defined(__sparc__) || defined(__s390x__) || \
++#if defined(__i386__) || defined(__sparc__) || defined(__sparc) || \
++    defined(sparc) || defined(__s390x__) || \
+     defined(__powerpc__) || defined(__x86_64__) || \
+     ( defined(__alpha__) && ( defined(__IEEE_FLOAT) || !defined(VMS) ) )
+ #define USE_IEEE
+--- a/src/main/texobj.c
++++ b/src/main/texobj.c
+@@ -847,6 +847,12 @@
+ _mesa_IsTexture( GLuint texture )
+ {
+    GET_CURRENT_CONTEXT(ctx);
++   struct gl_texture_object *obj;
+    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+-   return texture > 0 && _mesa_HashLookup(ctx->Shared->TexObjects, texture);
+-}
++   if (texture == 0)
++      return GL_FALSE;
++   obj = (struct gl_texture_object *)
++      _mesa_HashLookup(ctx->Shared->TexObjects, texture);
++   /* GenTextures reserves names; the first binding creates the GL object. */
++   return obj && obj->Target != 0;
++}
