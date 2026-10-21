@@ -3,7 +3,8 @@
 OpenGL 1.1 with a client-side GLX 1.0–1.4 binding for **32-bit SPARC /
 Solaris 2.6**. The library bundles the portable Mesa 4.0.4 renderer,
 implements all 336 GL 1.1 entry points and all 39 core GLX entry points,
-and dispatches eligible geometry and raster operations to Sun XGL.
+and dispatches eligible geometry and raster operations to Sun XGL. Mesa's
+SGI GLU 1.3 implementation is included as `libGLU`.
 
 The GLX binding provides visual/FBConfig selection, contexts and sharing,
 windows, pixmaps, pixmap-backed pbuffers, double buffering, separate draw/read
@@ -11,11 +12,13 @@ surfaces, context copying, X fonts, and procedure lookup. It uses Xlib directly;
 it does not implement the indirect GLX wire protocol or install an X server
 extension. Explicit indirect-context requests return NULL.
 
-Plain `make` and `make install` build and install the XGL-backed `libGL`.
+Plain `make` and `make install` build and install the XGL-backed `libGL` and
+the Mesa-based `libGLU` utility library.
 Native dispatch is enabled by default, with software fallback when the current
 operation or drawable cannot use the supported XGL path, or XGL fails.
-The public build and installation produce the XGL-backed libraries. The
-software renderer remains bundled for unsupported operations and validation.
+The software renderer remains bundled for unsupported operations and
+validation. GLU supplies utility calculations and geometry generation; its
+rendering calls use the same OpenGL acceleration and fallback paths.
 
 The GLX path submits eligible object-space geometry to XGL for model/view and
 perspective transforms, clipping, ambient/diffuse lighting, texture mapping,
@@ -36,13 +39,16 @@ for the supported combinations and remaining software operations.
 The supplied manuals informed the API and presentation design. See
 [the implementation notes](docs/XGL.md) for the XGL calls and manual page
 references. The renderer's source, provenance, and third-party license
-notices are included under [vendor/mesa](vendor/mesa/README.vendor).
+notices are included under [vendor/mesa](vendor/mesa/README.vendor). GLU has
+separate [source and license records](vendor/glu/README.vendor).
 
 ## Build on Solaris 2.6
 
 Install the Sun XGL SDK/runtime and OpenWindows development headers.
-Build with a 32-bit SPARC C compiler. No Python, C++, contemporary Mesa,
-OpenGL system library, or network download is needed to build the library.
+Build with 32-bit SPARC C and C++ compilers and the matching C++ runtime.
+The rendering core uses C; the complete GLU implementation includes C++ NURBS
+code. No Python, contemporary Mesa, OpenGL system library, or network download
+is needed to build the libraries.
 The defaults for the Sun packages are:
 
 ```
@@ -50,23 +56,24 @@ XGL_ROOT=/opt/SUNWits/Graphics-sw/xgl
 OPENWIN_ROOT=/usr/openwin
 ```
 
-With Sun WorkShop C and `make`:
+With Sun WorkShop C/C++ and `make`:
 
 ```sh
-make CC=cc 'CFLAGS=-O -Xa -KPIC' 'SHARED_FLAGS=-G' \
+make CC=cc CXX=CC 'CFLAGS=-O -Xa -KPIC' 'CXXFLAGS=-O -KPIC' 'SHARED_FLAGS=-G' \
   'XGL_LIBS=-L/opt/SUNWits/Graphics-sw/xgl/lib -R/opt/SUNWits/Graphics-sw/xgl/lib -L/usr/openwin/lib -R/usr/openwin/lib -lxgl -lX11 -ldga -ldl -lintl -lnsl -lsocket'
 ```
 
-With Solaris GCC, use `CFLAGS='-O2 -ansi -fPIC'` and
-`SHARED_FLAGS=-shared` instead. Set `XGL_ROOT`, `OPENWIN_ROOT`, and
-`XGL_LIBS` on the make command line when installed elsewhere. Use
+With Solaris GCC/G++, use `CC=gcc CXX=g++`, `CFLAGS='-O2 -ansi -fPIC'`,
+`CXXFLAGS='-O2 -fPIC'` and `SHARED_FLAGS=-shared` instead. Set `XGL_ROOT`,
+`OPENWIN_ROOT` and `XGL_LIBS` on the make command line when installed elsewhere. Use
 `make clean` before changing compiler, architecture, or compile flags.
-The portable C path is used, with no x86, VIS, or SPARC assembly dependency.
+The portable sources are used, with no x86, VIS, or SPARC assembly dependency.
 
 This produces `lib/libGL.a` and `lib/libGL.so`, also available under the
-`libXGLMesa` name for existing callers. Applications link
-against **one** of these libraries, plus XGL, X11, and libm. Do not link
-another GL implementation into the same process.
+`libXGLMesa` name for existing callers, plus `lib/libGLU.a` and `lib/libGLU.so`.
+Applications link against **one** GL implementation, plus XGL, X11 and libm.
+Add `-lGLU` before `-lGL` when using GLU. Do not link another GL implementation
+into the same process.
 
 ```sh
 cc -Iinclude -I/usr/openwin/include application.c \
@@ -79,6 +86,27 @@ For shared linking, supply runtime library paths with the compiler's
 `-R` option or the site's normal runtime loader configuration. To stage
 an installation, use `make install` (`install-xgl` is an alias) with the same
 build variables and, for example, `PREFIX=/opt/oldengl DESTDIR=/tmp/stage`.
+
+## Use GLU
+
+Include `<GL/glu.h>` and link with `-lGLU -lGL`. GLU provides camera and
+projection helpers, project/unproject, quadrics, polygon tessellation, NURBS,
+image scaling and mipmap generation. Create and make a GLX context current
+before using GLU operations that read or change GL state or render geometry.
+
+For a C application using Sun WorkShop, compile as C and use the C++ driver
+for the final link so static GLU linkage includes the matching C++ runtime:
+
+```sh
+cc -Iinclude -I/usr/openwin/include -c application.c -o application.o
+CC application.o -Llib -lGLU -lGL \
+  -L/opt/SUNWits/Graphics-sw/xgl/lib -lxgl \
+  -L/usr/openwin/lib -lX11 -lm
+```
+
+`make glu` builds GLU separately; its shared library links to this project's
+`libGL`, so that build still needs the native XGL SDK. See
+[GLU details](docs/GLU.md) for utility behavior, source provenance and testing.
 
 ## Use GLX
 
@@ -143,7 +171,8 @@ on a machine with an XGL-capable X display. Press any key to exit.
 
 The original `XGLMesa*` convenience binding remains a single-buffer software
 renderer with XGL presentation. Use GLX for the new geometry/raster dispatch
-and double-buffered contexts. GLU and GLUT are separate libraries.
+and double-buffered contexts. The bundled GLU works with either binding;
+GLUT remains a separate external library.
 Color-index rendering remains available in software.
 
 ## Run development tests
@@ -159,6 +188,7 @@ make test-texture
 make test-fragments
 make test-clip
 make test-lighting
+make test-glu
 ```
 
 These targets build internal reference libraries under `build/test/`, including
@@ -168,6 +198,8 @@ libraries are test artifacts and are not installed. The behavioral test
 executables do not require Python; the API symbol audits use Python 3 and
 GNU/BSD-style `nm`. XGL adapter tests use test-only SDK mocks with the real
 renderer; they do not require Sun headers or libraries.
+The GLU tests link the static GLU library to the internal offscreen renderer
+and need a C++ compiler, but no X server or Sun XGL SDK.
 
 ## Validation limits
 
@@ -181,4 +213,4 @@ Mesa release. See [docs/VALIDATION.md](docs/VALIDATION.md) for the checks
 and a target-machine validation procedure.
 
 New binding/build/test code uses the root MIT license. Retained Mesa and
-SGI headers keep their own notices and bundled licenses.
+SGI sources and headers keep their own notices and bundled licenses.

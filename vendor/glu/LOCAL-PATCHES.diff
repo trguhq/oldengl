@@ -1,0 +1,451 @@
+--- a/src/libnurbs/internals/arc.cc
++++ b/src/libnurbs/internals/arc.cc
+@@ -332,7 +332,7 @@
+ 
+ inline long tooclose( REAL x, REAL y )
+ {
+-    return (abs(x-y) < TOL) ?  1 : 0;
++    return (glu_abs(x-y) < TOL) ?  1 : 0;
+ }
+ 
+ 
+--- a/src/libnurbs/internals/arctess.cc
++++ b/src/libnurbs/internals/arctess.cc
+@@ -247,8 +247,8 @@
+ 
+ /*    if(rate <= 0.06) rate = 0.06;*/
+ 
+-    int snsteps = 1 + (int) (abs(s2 - s1) / rate );
+-    int tnsteps = 1 + (int) (abs(t2 - t1) / rate );
++    int snsteps = 1 + (int) (glu_abs(s2 - s1) / rate );
++    int tnsteps = 1 + (int) (glu_abs(t2 - t1) / rate );
+     int nsteps = max(1,max( snsteps, tnsteps ));
+ 
+     REAL sstepsize = (s2 - s1) / (REAL) nsteps;
+@@ -395,8 +395,8 @@
+             vert->param[0] = u/w;
+     	    vert->param[1] = v/w;
+ #ifndef NOELIMINATION
+-	    REAL ds = abs(vert[0].param[0] - vert[-1].param[0]);
+-	    REAL dt = abs(vert[0].param[1] - vert[-1].param[1]);
++	    REAL ds = glu_abs(vert[0].param[0] - vert[-1].param[0]);
++	    REAL dt = glu_abs(vert[0].param[1] - vert[-1].param[1]);
+ 	    int canremove = (ds<geo_stepsize && dt<geo_stepsize) ? 1 : 0;
+ 	    REAL ods=0.0, odt=0.0;
+ 
+@@ -454,8 +454,8 @@
+             vert->param[0] = u;
+ 	    vert->param[1] = v;
+ #ifndef NOELIMINATION
+-	    REAL ds = abs(vert[0].param[0] - vert[-1].param[0]);
+-	    REAL dt = abs(vert[0].param[1] - vert[-1].param[1]);
++	    REAL ds = glu_abs(vert[0].param[0] - vert[-1].param[0]);
++	    REAL dt = glu_abs(vert[0].param[1] - vert[-1].param[1]);
+ 	    int canremove = (ds<geo_stepsize && dt<geo_stepsize) ? 1 : 0;
+ 	    REAL ods=0.0, odt=0.0;
+ 
+--- a/src/libnurbs/internals/ccw.cc
++++ b/src/libnurbs/internals/ccw.cc
+@@ -562,6 +562,6 @@
+ Subdivider::ccw( TrimVertex *a, TrimVertex *b, TrimVertex *c )
+ {
+     REAL d = det3( a, b, c );
+-    if( abs(d) < 0.0001 ) return -1;
++    if( glu_abs(d) < 0.0001 ) return -1;
+     return (d < 0.0) ? 0 : 1;
+ }
+--- a/src/libnurbs/internals/mapdesc.cc
++++ b/src/libnurbs/internals/mapdesc.cc
+@@ -92,7 +92,7 @@
+ void
+ Mapdesc::identify( REAL dest[MAXCOORDS][MAXCOORDS] )
+ {
+-    memset( dest, 0, sizeof( dest ) );
++    memset( dest, 0, MAXCOORDS * MAXCOORDS * sizeof(REAL) );
+     for( int i=0; i != hcoords; i++ )
+ 	dest[i][i] = 1.0;
+ }
+--- a/src/libnurbs/internals/patch.cc
++++ b/src/libnurbs/internals/patch.cc
+@@ -464,7 +464,7 @@
+ void
+ Patchspec::singleStep()
+ {
+-    stepsize =  sidestep[0] =  sidestep[1] = abs(range[2]);
++    stepsize =  sidestep[0] =  sidestep[1] = glu_abs(range[2]);
+ }
+ 
+ void 
+--- a/src/libnurbs/internals/reader.cc
++++ b/src/libnurbs/internals/reader.cc
+@@ -55,7 +55,7 @@
+ #define ELIMINATE_REDUNDANT_POINTS 
+ 
+ #ifdef  ELIMINATE_REDUNDANT_POINTS 
+-#define equal(x,y) ( abs(x-y) <= 0.00001)
++#define equal(x,y) ( glu_abs(x-y) <= 0.00001)
+ #endif
+ 
+ #ifdef ELIMINATE_REDUNDANT_POINTS 
+--- a/src/libnurbs/internals/simplemath.h
++++ b/src/libnurbs/internals/simplemath.h
+@@ -51,6 +51,6 @@
+ min( REAL x, REAL y ) { return ( x > y ) ? y : x; }
+ 
+ inline REAL 
+-abs( REAL x ) { return ( x < 0.0 ) ? -x : x; }
++glu_abs( REAL x ) { return ( x < 0.0 ) ? -x : x; }
+ 
+ #endif /* __glusimplemath_h_ */
+--- a/src/libnurbs/internals/trimvertpool.cc
++++ b/src/libnurbs/internals/trimvertpool.cc
+@@ -68,7 +68,7 @@
+ {
+     // free all arrays of TrimVertices vertices
+     while( nextvlistslot ) {
+-	delete vlist[--nextvlistslot];
++	delete[] vlist[--nextvlistslot];
+     }
+ 
+     // reallocate space for array of pointers to vertex lists
+@@ -87,7 +87,7 @@
+ 
+     // free all arrays of TrimVertices vertices
+     while( nextvlistslot ) {
+-	delete vlist[--nextvlistslot];
++	delete[] vlist[--nextvlistslot];
+ 	vlist[nextvlistslot] = 0;
+     }
+ 
+--- a/src/libutil/mipmap.c
++++ b/src/libutil/mipmap.c
+@@ -407,7 +407,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -506,7 +506,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -604,7 +604,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+     else
+     for (i = 0; i < newheight; i++) {
+@@ -618,7 +618,7 @@
+ 	    }
+ 	    t += group_size;
+         }
+-        t += ysize;
++        t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -739,7 +739,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+     else
+     for (i = 0; i < newheight; i++) {
+@@ -760,7 +760,7 @@
+ 	    }
+ 	    t += group_size;
+         }
+-        t += ysize;
++        t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -883,7 +883,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+     else
+     for (i = 0; i < newheight; i++) {
+@@ -901,7 +901,7 @@
+ 	    }
+ 	    t += group_size;
+         }
+-        t += ysize;
++        t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -1021,7 +1021,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+     else 
+     for (i = 0; i < newheight; i++) {
+@@ -1043,7 +1043,7 @@
+ 	    }
+ 	    t += group_size;
+         }
+-        t += ysize;
++        t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -1165,7 +1165,7 @@
+ 	    }
+ 	    t += group_size;
+ 	}
+-	t += ysize;
++	t += 2 * ysize - width * group_size;
+     }
+     else 
+     for (i = 0; i < newheight; i++) {
+@@ -1185,7 +1185,7 @@
+ 	    }
+ 	    t += group_size;
+         }
+-        t += ysize;
++        t += 2 * ysize - width * group_size;
+     }
+ }
+ 
+@@ -3831,9 +3831,13 @@
+     if (width == newwidth && height == newheight) {
+ 	/* Use usersImage for level userLevel */
+         if (baseLevel <= level && level <= maxLevel) { 
++	/* Skip offsets are already applied to usersImage, but its row stride
++	 * still belongs to the caller until the first reduced image. */
++	glPixelStorei(GL_UNPACK_ROW_LENGTH, psm.unpack_row_length);
+ 	glTexImage2D(target, level, internalFormat, width, 
+ 		height, 0, format, type,
+ 		usersImage);
++	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+ 	}
+ 	if(levels == 0) { /* we're done. clean up and return */
+ 	  glPixelStorei(GL_UNPACK_ALIGNMENT, psm.unpack_alignment);
+@@ -4318,8 +4322,11 @@
+ 
+     glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+     if (baseLevel <= level && level <= maxLevel) {
++    /* Internal images are tightly packed, unlike the caller's rows. */
++    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+     glTexImage2D(target, level, internalFormat, newwidth, newheight, 0, 
+ 		 format, type, (void *)srcImage);
++    glPixelStorei(GL_UNPACK_ALIGNMENT, psm.unpack_alignment);
+     }
+ 
+     level++; /* update current level for the loop */
+@@ -7506,9 +7513,10 @@
+ 	     (*shovePackedPixel)(totals,outIndex,dataOut);
+ 
+ 	     outIndex++;
+-	     /* skip over to next horizontal square of 4 */
+-	     src+= imageSizeInBytes + imageSizeInBytes;
++	     /* Skip to the next pair of pixels in these two slices. */
++	     src+= pixelSizeInBytes + pixelSizeInBytes;
+ 	 }
++	 src = (const char *)dataIn + (ii+1) * 2 * imageSizeInBytes;
+       }
+ 
+       /* assert() */
+@@ -7549,9 +7557,10 @@
+ 
+ 	    outIndex++;
+ 
+-	    /* skip over to next vertical square of 4 */
+-	    src+= imageSizeInBytes + imageSizeInBytes;
++	    /* Skip to the next pair of rows in these two slices. */
++	    src+= rowSizeInBytes + rowSizeInBytes;
+ 	 }
++	 src = (const char *)dataIn + (ii+1) * 2 * imageSizeInBytes;
+       } 
+       /* assert() */
+    }
+@@ -7664,11 +7673,11 @@
+ 	    src+= rowSizeInBytes;
+ 	 }
+ 
+-	 src+= imageSizeInBytes; 
++	 src = (const char *)dataIn + (dd+1) * 2 * imageSizeInBytes; 
+       } /* for dd */
+ 
+       /* both pointers must reach one byte after the end */
+-      assert(src == &((const char *)dataIn)[rowSizeInBytes*height*depth]);
++      assert(src == &((const char *)dataIn)[imageSizeInBytes*depth]);
+       assert(outIndex == halfWidth * halfHeight * halfDepth);
+    } /* for dd */
+ 
+@@ -7764,9 +7773,13 @@
+    if (width == newWidth && height == newHeight && depth == newDepth) {
+        /* Use usersImage for level userLevel */
+        if (baseLevel <= level && level <= maxLevel) {
++          glPixelStorei(GL_UNPACK_ROW_LENGTH, psm.unpack_row_length);
++          glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, psm.unpack_image_height);
+           gluTexImage3D(target, level, internalFormat, width, 
+ 		       height, depth, 0, format, type,
+ 		       usersImage);
++          glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
++          glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+        }
+        if(levels == 0) { /* we're done. clean up and return */
+ 	 glPixelStorei(GL_UNPACK_ALIGNMENT, psm.unpack_alignment);
+@@ -8200,6 +8213,8 @@
+        level = userLevel;	
+    }
+ 
++   /* Every generated 3D image is tightly packed in both rows and slices. */
++   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+    if (baseLevel <= level && level <= maxLevel) {
+      gluTexImage3D(target, level, internalFormat, newWidth, newHeight, newDepth,
+@@ -8668,11 +8683,11 @@
+ 	    src+= elementSizeInBytes;
+ 	 } /* for cc */
+ 
+-	 /* skip over to next group of 2 */
+-	 src+= rowSizeInBytes;
++	 /* Skip to the next pair of source slices. */
++	 src = (const char *)dataIn + (ii+1) * 2 * imageSizeInBytes;
+       } /* for ii */
+ 
+-      assert(src == &((const char *)dataIn)[rowSizeInBytes*height*depth]);
++      assert(src == &((const char *)dataIn)[imageSizeInBytes*depth]);
+       assert(outIndex == halfDepth * components);
+    }
+    else if (height == 1) {	/* horizontal slice viewed from top */
+@@ -8718,10 +8733,10 @@
+ 	 } /* for jj */
+ 	 src+= padBytes;
+ 
+-	 src+= rowSizeInBytes;
++	 src = (const char *)dataIn + (ii+1) * 2 * imageSizeInBytes;
+       } /* for ii */
+ 
+-      assert(src == &((const char *)dataIn)[rowSizeInBytes*height*depth]);
++      assert(src == &((const char *)dataIn)[imageSizeInBytes*depth]);
+       assert(outIndex == halfWidth * halfDepth * components);
+    } 
+    else if (width == 1) {	/* vertical slice viewed from top */
+@@ -8767,10 +8782,10 @@
+ 	    src+= rowSizeInBytes;
+ 	 } /* for jj */
+ 
+-	 src+= imageSizeInBytes;
++	 src = (const char *)dataIn + (ii+1) * 2 * imageSizeInBytes;
+       } /* for ii */ 
+ 
+-      assert(src == &((const char *)dataIn)[rowSizeInBytes*height*depth]);
++      assert(src == &((const char *)dataIn)[imageSizeInBytes*depth]);
+       assert(outIndex == halfHeight * halfDepth * components);
+    }
+ 
+@@ -8876,11 +8891,11 @@
+ 	    src+= rowSizeInBytes;
+ 	 } /* for ii */
+ 
+-	 src+= imageSizeInBytes; 
++	 src = (const char *)dataIn + (dd+1) * 2 * imageSizeInBytes; 
+       } /* for dd */
+ 
+       /* both pointers must reach one byte after the end */
+-      assert(src == &((const char *)dataIn)[rowSizeInBytes*height*depth]);
++      assert(src == &((const char *)dataIn)[imageSizeInBytes*depth]);
+       assert(outIndex == halfWidth * halfHeight * halfDepth * components);
+    }
+ } /* halveImage3D() */
+--- a/src/libutil/project.c
++++ b/src/libutil/project.c
+@@ -71,7 +71,7 @@
+ void GLAPIENTRY
+ gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar)
+ {
+-    GLdouble m[4][4];
++    GLdouble m[16];
+     double sine, cotangent, deltaZ;
+     double radians = fovy / 2 * __glPi / 180;
+ 
+@@ -82,14 +82,14 @@
+     }
+     cotangent = COS(radians) / sine;
+ 
+-    __gluMakeIdentityd(&m[0][0]);
+-    m[0][0] = cotangent / aspect;
+-    m[1][1] = cotangent;
+-    m[2][2] = -(zFar + zNear) / deltaZ;
+-    m[2][3] = -1;
+-    m[3][2] = -2 * zNear * zFar / deltaZ;
+-    m[3][3] = 0;
+-    glMultMatrixd(&m[0][0]);
++    __gluMakeIdentityd(m);
++    m[0] = cotangent / aspect;
++    m[5] = cotangent;
++    m[10] = -(zFar + zNear) / deltaZ;
++    m[11] = -1;
++    m[14] = -2 * zNear * zFar / deltaZ;
++    m[15] = 0;
++    glMultMatrixd(m);
+ }
+ 
+ static void normalize(float v[3])
+@@ -118,7 +118,7 @@
+ {
+     int i;
+     float forward[3], side[3], up[3];
+-    GLfloat m[4][4];
++    GLfloat m[16];
+ 
+     forward[0] = centerx - eyex;
+     forward[1] = centery - eyey;
+@@ -137,20 +137,20 @@
+     /* Recompute up as: up = side x forward */
+     cross(side, forward, up);
+ 
+-    __gluMakeIdentityf(&m[0][0]);
+-    m[0][0] = side[0];
+-    m[1][0] = side[1];
+-    m[2][0] = side[2];
+-
+-    m[0][1] = up[0];
+-    m[1][1] = up[1];
+-    m[2][1] = up[2];
+-
+-    m[0][2] = -forward[0];
+-    m[1][2] = -forward[1];
+-    m[2][2] = -forward[2];
+-
+-    glMultMatrixf(&m[0][0]);
++    __gluMakeIdentityf(m);
++    m[0] = side[0];
++    m[4] = side[1];
++    m[8] = side[2];
++
++    m[1] = up[0];
++    m[5] = up[1];
++    m[9] = up[2];
++
++    m[2] = -forward[0];
++    m[6] = -forward[1];
++    m[10] = -forward[2];
++
++    glMultMatrixf(m);
+     glTranslated(-eyex, -eyey, -eyez);
+ }
+ 

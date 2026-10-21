@@ -1,8 +1,10 @@
 # Portable make rules. GNU make or Solaris /usr/ccs/bin/make may be used.
 # See README.md for Sun WorkShop and Solaris GCC command lines.
 CC = cc
+CXX = c++
 AR = ar
 CFLAGS = -O2 -fPIC
+CXXFLAGS = -O2 -fPIC
 CPPFLAGS =
 SHARED_FLAGS = -shared
 LDFLAGS =
@@ -23,17 +25,19 @@ include mk/sources.mk
 # Establish the default before including native XMesa compilation rules.
 all: xgl
 include mk/glx.mk
+include mk/glu.mk
 MESA_OBJECTS = $(MESA_SOURCES:.c=.o)
 XMESA_OBJECTS = $(XMESA_SOURCES:.c=.o)
 XMESA_ACCEL_OBJECTS = $(XMESA_SOURCES:.c=.xgl.o)
 XGL_OBJECTS = src/xgl_backend.o src/xgl_pixels.o src/xgl_session.o src/xgl_accel.o src/xgl_xmesa.o src/xgl_batch.o src/xgl_clip.o src/xgl_lighting.o src/xgl_texture.o src/xgl_tnl.o src/xgl_hybrid.o src/xgl_fragments.o
-PUBLIC_HEADERS = include/GL/gl.h include/GL/glext.h include/GL/osmesa.h
+CORE_PUBLIC_HEADERS = include/GL/gl.h include/GL/glext.h include/GL/osmesa.h
+PUBLIC_HEADERS = $(CORE_PUBLIC_HEADERS) include/GL/glu.h
 # Reference libraries are private test fixtures, never installed products.
 TEST_MESA_ARCHIVE = build/test/libmesa.a
 TEST_MESA_SHARED = build/test/libmesa.so
 TEST_GLX_ARCHIVE = build/test/libglx-reference.a
 
-xgl: lib/libXGLMesa.a lib/libXGLMesa.so lib/libGL.a lib/libGL.so
+xgl: lib/libXGLMesa.a lib/libXGLMesa.so lib/libGL.a lib/libGL.so glu
 
 example: xgl examples/triangle examples/glx_triangle examples/glx_textured_cube
 
@@ -46,7 +50,7 @@ examples/glx_triangle: examples/glx_triangle.c lib/libGL.a
 examples/triangle: examples/triangle.c lib/libXGLMesa.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude $(XGL_CPPFLAGS) $(LDFLAGS) -o $@ examples/triangle.c lib/libXGLMesa.a $(XGL_LIBS) $(LDLIBS)
 
-$(MESA_OBJECTS): $(MESA_HEADERS) $(PUBLIC_HEADERS)
+$(MESA_OBJECTS): $(MESA_HEADERS) $(CORE_PUBLIC_HEADERS)
 
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(XMESA_INCLUDES) $(X11_CPPFLAGS) -c $< -o $@
@@ -177,6 +181,28 @@ tests/test_lighting: tests/test_lighting.c src/xgl_lighting.c src/xgl_lighting.h
 test-lighting: tests/test_lighting
 	./tests/test_lighting
 
+tests/test_glu.o: tests/test_glu.c include/GL/glu.h include/GL/osmesa.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude -c tests/test_glu.c -o $@
+
+tests/test_glu: tests/test_glu.o lib/libGLU.a $(TEST_MESA_ARCHIVE)
+	$(CXX) $(LDFLAGS) -o $@ tests/test_glu.o lib/libGLU.a $(TEST_MESA_ARCHIVE) $(LDLIBS)
+
+test-glu: tests/test_glu
+	./tests/test_glu
+	$(PYTHON) tests/check_glu_api.py lib/libGLU.a
+
+tests/test_glu_glx.o: tests/test_glu_glx.c tests/mock_native_xgl.h include/GL/glu.h include/GL/glx.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude $(X11_CPPFLAGS) -c tests/test_glu_glx.c -o $@
+
+tests/glu_mock_native_xgl.o: tests/mock_native_xgl.c tests/mock_native_xgl.h tests/mock/xgl/xgl.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/mock_sdk $(X11_CPPFLAGS) -c tests/mock_native_xgl.c -o $@
+
+tests/test_glu_glx: tests/test_glu_glx.o tests/glu_mock_native_xgl.o lib/libGLU.a lib/libGL.a
+	$(CXX) $(LDFLAGS) -o $@ tests/test_glu_glx.o tests/glu_mock_native_xgl.o lib/libGLU.a lib/libGL.a $(X11_LIBS) $(LDLIBS)
+
+test-glu-glx: tests/test_glu_glx
+	./tests/test_glu_glx
+
 test-accel: tests/test_accel
 	./tests/test_accel
 
@@ -184,18 +210,20 @@ install: xgl
 	mkdir -p $(DESTDIR)$(PREFIX)/include/GL $(DESTDIR)$(PREFIX)/lib
 	mkdir -p $(DESTDIR)$(PREFIX)/share/doc/oldengl
 	cp $(PUBLIC_HEADERS) $(DESTDIR)$(PREFIX)/include/GL/
-	cp LICENSE README.md docs/XGL.md docs/GLX.md docs/ACCELERATION.md docs/VALIDATION.md $(DESTDIR)$(PREFIX)/share/doc/oldengl/
+	cp LICENSE README.md docs/XGL.md docs/GLX.md docs/GLU.md docs/ACCELERATION.md docs/VALIDATION.md $(DESTDIR)$(PREFIX)/share/doc/oldengl/
 	cp vendor/mesa/LICENSE.MIT vendor/mesa/LICENSE.SGI-B-1.1 vendor/mesa/README.vendor $(DESTDIR)$(PREFIX)/share/doc/oldengl/
 	cp include/GL/xglmesa.h $(DESTDIR)$(PREFIX)/include/GL/
 	cp include/GL/glx.h include/GL/glxext.h include/GL/glxtokens.h $(DESTDIR)$(PREFIX)/include/GL/
-	cp lib/libXGLMesa.a lib/libXGLMesa.so lib/libGL.a lib/libGL.so $(DESTDIR)$(PREFIX)/lib/
+	cp lib/libXGLMesa.a lib/libXGLMesa.so lib/libGL.a lib/libGL.so lib/libGLU.a lib/libGLU.so $(DESTDIR)$(PREFIX)/lib/
 	cp vendor/xmesa/README.vendor $(DESTDIR)$(PREFIX)/share/doc/oldengl/README.xmesa
+	cp vendor/glu/README.vendor $(DESTDIR)$(PREFIX)/share/doc/oldengl/README.glu
+	cp vendor/glu/LICENSE.SGI-B-1.1 $(DESTDIR)$(PREFIX)/share/doc/oldengl/LICENSE.GLU.SGI-B-1.1
 
 install-xgl: install
 
 clean:
-	rm -f $(MESA_OBJECTS) $(XMESA_OBJECTS) $(XMESA_ACCEL_OBJECTS) $(XGL_OBJECTS) $(TEST_MESA_ARCHIVE) $(TEST_MESA_SHARED) $(TEST_GLX_ARCHIVE) lib/*.a lib/*.so tests/test_gl tests/test_xgl tests/test_glx tests/test_accel tests/test_tnl tests/test_texture tests/test_fragments tests/test_clip tests/test_lighting tests/test_glx_accel tests/*_mock.o examples/triangle examples/glx_triangle examples/glx_textured_cube
+	rm -f $(MESA_OBJECTS) $(XMESA_OBJECTS) $(XMESA_ACCEL_OBJECTS) $(XGL_OBJECTS) $(GLU_OBJECTS) $(TEST_MESA_ARCHIVE) $(TEST_MESA_SHARED) $(TEST_GLX_ARCHIVE) lib/*.a lib/*.so tests/test_gl tests/test_xgl tests/test_glx tests/test_accel tests/test_tnl tests/test_texture tests/test_fragments tests/test_clip tests/test_lighting tests/test_glu tests/test_glu.o tests/test_glu_glx tests/test_glu_glx.o tests/glu_mock_native_xgl.o tests/test_glx_accel tests/*_mock.o examples/triangle examples/glx_triangle examples/glx_textured_cube
 
-.PHONY: all xgl example test test-glx test-accel test-tnl test-texture test-fragments test-clip test-lighting test-glx-accel install install-xgl clean
+.PHONY: all xgl glu example test test-glx test-accel test-tnl test-texture test-fragments test-clip test-lighting test-glu test-glu-glx test-glx-accel install install-xgl clean
 
 $(XMESA_OBJECTS): $(XMESA_HEADERS) $(MESA_HEADERS)

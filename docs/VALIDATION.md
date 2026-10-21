@@ -19,6 +19,9 @@ The following results distinguish software behavior from native XGL execution.
 | `make test-lighting` | 38 checks of native spotlight mapping, material products, attenuation, compatibility and error handling |
 | `make test-glx` with Xvfb | 91 assertions using real Xlib windows and the software GLX binding |
 | `make test-glx-accel` with Xvfb | 716 checks using real Xlib windows, native XMesa hooks and a synthetic XGL runtime |
+| `make test-glu` | 109 GLU utility and rendering checks against the internal offscreen renderer; no Sun SDK or X server required |
+| `make test-glu-glx` with the host fixture SDK and Xvfb | 31 GLU geometry checks through real GLX windows and synthetic native XGL |
+| `python3 tests/check_glu_api.py lib/libGLU.a` and `.so` | All 59 Mesa GLU 1.3 C API functions declared and defined |
 | `python3 tests/check_glx_api.py build/test/libglx-reference.a` | All 39 GLX 1.0–1.4 functions declared and defined |
 | `python3 tests/check_api.py build/test/libmesa.a` | All 336 OpenGL 1.1 functions declared and defined |
 | Same API audit with `build/test/libmesa.so` | All 336 functions in the shared reference library |
@@ -26,7 +29,12 @@ The following results distinguish software behavior from native XGL execution.
 | Adapter, conversion, fixture and integration-test sanitizers | AddressSanitizer and UndefinedBehaviorSanitizer; renderer archive is not instrumented |
 | SPARC preprocessor configurations | Sun `__sparc`, `__sparc__`, and `sparc` spellings select big-endian packing and C89 float-math fallbacks |
 
-All 1,343 behavioral assertions/checks pass, excluding the separate API audits.
+The GL/GLX suites retain 1,343 passing behavioral assertions/checks, excluding
+the separate API audits and GLU checks.
+The 109 GLU checks and 31 GLU/GLX checks also pass with static and shared
+linking. Together the behavior suites contain 1,483 checks. A separate build
+instruments all 89 GLU translation units and the 109-check test with ASan/UBSan
+and leak detection; it passes with the Mesa reference archive uninstrumented.
 The 716 native GLX/hybrid checks and 37 captured-fragment checks also pass
 with ASan/UBSan and leak detection. Those runs instrument the adapter and
 tests; the historical Mesa archive is not instrumented.
@@ -82,6 +90,11 @@ switch, sharing, resizing and rollback, invalid calls, and resource cleanup.
    termination/recreation of the shared XGL session. Repeat with the
    relevant target graphics adapter and XGL driver, including remote
    displays if the application needs them.
+6. Build and run `make test-glu` with the same Sun C/C++ compiler family and
+   32-bit settings. Link a GLX application with `-lGLU -lGL` through the C++
+   driver and exercise quadric and NURBS rendering on the target display.
+   Confirm shared-library and C++ runtime search paths as well as geometry,
+   normals, texture coordinates and cleanup.
 
 These single-buffer restrictions apply to the original `XGLMesa*`
 convenience binding: `GL_DOUBLEBUFFER` is false and `GL_BACK` is invalid.
@@ -191,12 +204,15 @@ remaining software features.
 
 ## Default build and installation
 
-Plain `make` selects the native XGL-backed libraries. On the host this was
-verified with the synthetic SDK, followed by staged `make install` checks
-that compare the installed `libGL` and `libXGLMesa` archives/shared libraries
-and GLX headers with their build outputs. The public build and installation
-produce only the XGL-backed libraries. Internal Mesa and Mesa/Xlib reference
-libraries are generated under `build/test/` for tests and are never installed.
+Plain `make` selects the native XGL-backed GL libraries and Mesa GLU. On the
+host this was verified with the synthetic SDK, followed by staged
+`make install` checks that compare the installed `libGL`, `libXGLMesa` and
+`libGLU` archives/shared libraries and public headers with their build outputs.
+The public build and installation produce the XGL-backed GL libraries and
+`libGLU`, with their public headers.
+GLU's NURBS implementation requires the matching C++ runtime. Internal Mesa and
+Mesa/Xlib reference libraries are generated under `build/test/` for tests and
+are never installed.
 The build does not silently substitute a software-only library when the XGL
 SDK is missing.
 
@@ -204,3 +220,11 @@ The native GLX routing and hybrid suites are run normally and with ASan/UBSan
 and leak detection; the Mesa archive itself is not instrumented. The separate
 native adapter suite passes 40 checks. These remain host fixture validations,
 with the target-machine SDK and hardware checks described above outstanding.
+
+GLU's pinned source, original checksums and exact local corrections are kept
+under `vendor/glu`. Corrections address modern C++ overload compatibility,
+projection-array storage, NURBS identity initialization and array destruction,
+and mipmap input/output row and slice strides. The mipmap regressions verify
+all selected base texels, filtered levels and restored pixel-store state for
+byte, unsigned-short, packed RGB565 and 3D images. NURBS tests include
+callback-generated curves/surfaces and a piecewise-linear trimmed hole.

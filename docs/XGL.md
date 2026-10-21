@@ -15,7 +15,8 @@ No OpenGL primitive is approximated by an XGL primitive with different rules.
 This is an initial correctness-oriented backend. It does not accelerate GL
 geometry with XGL and is not a GLX implementation. Existing applications that
 create GLX contexts must adapt their window-system calls to `XGLMesa*`; their GL
-rendering calls can stay unchanged. GLU and GLUT are separate libraries.
+rendering calls can stay unchanged. The bundled [GLU](GLU.md) utility library
+works with this binding; GLUT remains a separate external library.
 
 ## Context and presentation contract
 

@@ -15,3 +15,5 @@
 /tests/test_fragments
 /tests/test_clip
 /tests/test_lighting
+/tests/test_glu
+/tests/test_glu_glx

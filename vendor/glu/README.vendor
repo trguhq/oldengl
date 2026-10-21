@@ -1,0 +1,73 @@
+Mesa 4.0.4 SGI OpenGL Utility Library (GLU 1.3)
+================================================
+
+Repository: https://github.com/chaotic-cx/mesa-mirror.git
+Tag: mesa_4_0_4
+Exact commit: 61b226a4f4d29a6f7654cac22ae96b76b139bd8f
+Implementation root: src/glu/sgi
+Public header: include/GL/glu.h
+Transport: Git over HTTPS; files imported from the pinned Git blobs.
+
+Selection and layout
+--------------------
+This is the complete SGI GLU 1.3 implementation distributed with Mesa 4.0.4.
+It includes utility and projection routines, image scaling and mipmaps,
+quadrics, polygon tessellation, and the complete NURBS engine. Unlike the
+older Mesa GLU 1.1 implementation, this selection implements the advertised
+GLU 1.3 API instead of supplying partial later-version interfaces.
+
+The upstream libutil, libtess, libnurbs and private include directories are
+retained under src/. All their C, C++ and header files are selected, except
+the unused top-level dummy.cc. The upstream Makefile.X11 compile list selects
+16 C and 73 C++ translation units; priorityq-heap.c is included by priorityq.c
+and is not compiled separately. The public header is retained under
+include/GL/glu.h and copied byte-for-byte to OldenGL's public include/GL/.
+SOURCE-MAP records each local path and its original upstream location.
+
+The implementation uses C for utilities and tessellation, and C++ for NURBS.
+Applications use its C ABI through <GL/glu.h>. A compatible C++ compiler and
+runtime are needed to build and link GLU. The historical source has been
+checked with host C89 and C++98 compilers; this does not establish a Solaris
+2.6 Sun WorkShop compiler build or target hardware validation.
+
+License
+-------
+The SGI sources and public header retain the SGI Free Software License B,
+Version 1.1 notices supplied with this Mesa release. LICENSE.SGI-B-1.1 is
+the complete license text already preserved by OldenGL's renderer import,
+originally retrieved from the SPDX license-list-data repository. Individual
+file notices remain authoritative. OldenGL's root LICENSE does not replace
+these third-party notices. No GLU code from the separately LGPL-licensed
+legacy src/glu/mesa implementation is included.
+
+Integrity and local changes
+---------------------------
+UPSTREAM-SHA256 records the original SHA-256 hashes for every selected C,
+C++ and header file, using paths relative to this directory. These values
+remain the upstream checksums if a local correction becomes necessary.
+The initial import is byte-for-byte from the exact commit above. Build
+integration is maintained separately in ../../mk/glu.mk.
+
+Local source corrections:
+* src/libnurbs/internals/simplemath.h and its callers in arc.cc, arctess.cc,
+  ccw.cc, patch.cc and reader.cc: rename the private REAL absolute-value
+  helper from abs to glu_abs. This preserves its original arithmetic while
+  avoiding a conflicting declaration of the standard C++ abs(float) overload
+  supplied by current C++ library headers. It also compiles on older C++
+  implementations without relying on that standard overload.
+* src/libutil/project.c: use actual 16-element arrays for the perspective
+  and look-at matrices, preserving their exact column-major values while
+  avoiding out-of-row accesses through pointers to four-element subarrays.
+* src/libnurbs/internals/mapdesc.cc: initialize every element of a NURBS
+  identity matrix. sizeof on the array parameter gave only the pointer size,
+  leaving most off-diagonal elements uninitialized.
+* src/libnurbs/internals/trimvertpool.cc: release trim-vertex arrays with
+  delete[] in both pool reset and destruction, matching their new[] allocation.
+* src/libutil/mipmap.c: respect padded input rows and slices when reducing
+  scalar and packed images; preserve the caller's row/image stride for the
+  original base upload, use tight alignment for generated images, and restore
+  the caller's pixel-store state. Regression tests cover byte and unsigned-short
+  images, packed RGB565, skipped rows/pixels/images and volume mipmaps.
+
+LOCAL-PATCHES.diff records the exact corrections against the pinned source.
+UPSTREAM-SHA256 intentionally retains the pre-correction hashes.

@@ -5,6 +5,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make -j4 test test-accel CFLAGS='-O2 -fPIC -std=c89'
+      - run: make -j4 test test-accel test-glu CFLAGS='-O2 -fPIC -std=c89' CXXFLAGS='-O2 -fPIC -std=c++98'
       - run: sudo apt-get update && sudo apt-get install -y libx11-dev xvfb xauth xfonts-base
       - run: xvfb-run -a make test-glx CFLAGS='-O2 -fPIC -std=c89' X11_CPPFLAGS= X11_LIBS=-lX11
